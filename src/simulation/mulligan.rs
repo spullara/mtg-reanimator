@@ -66,49 +66,38 @@ fn scry_after_mulligan(library: &mut Vec<Card>, hand: &[Card], scry_count: usize
     if scry_count == 0 || library.is_empty() {
         return;
     }
-    
+
     let hand_lands = count_lands(hand);
-    let mut to_bottom = Vec::new();
-    let mut to_top = Vec::new();
-    
+    let mut to_bottom: Vec<Card> = Vec::new();
+    let mut to_top: Vec<Card> = Vec::new();
+
     // Look at top scry_count cards
-    for i in 0..scry_count.min(library.len()) {
-        let card = &library[i];
+    let scry_cards: Vec<Card> = library.drain(0..scry_count.min(library.len())).collect();
+
+    for card in scry_cards {
         let name = card.name();
-        
+
         // Always bottom Bringer/Terror (want in graveyard, not hand)
         if name == "Bringer of the Last Gift" || name == "Terror of the Peaks" {
-            to_bottom.push(i);
+            to_bottom.push(card);
         }
         // Bottom lands if we have enough in hand
         else if matches!(card, Card::Land(_)) && hand_lands >= 3 {
-            to_bottom.push(i);
+            to_bottom.push(card);
         }
         // Bottom expensive spells if we're missing lands
         else if card.mana_value() >= 4 && hand_lands < 2 {
-            to_bottom.push(i);
+            to_bottom.push(card);
         } else {
-            to_top.push(i);
+            to_top.push(card);
         }
     }
-    
-    // Reconstruct library: keep top cards in order, then rest, then bottom cards
-    let mut new_library = Vec::new();
-    
-    // Add cards to keep on top (in original order)
-    for i in &to_top {
-        new_library.push(library.remove(*i));
-    }
-    
-    // Add rest of library
-    let rest: Vec<Card> = library.drain(0..).collect();
-    new_library.extend(rest);
-    
-    // Add cards to bottom (in original order)
-    for i in &to_bottom {
-        new_library.push(library.remove(*i));
-    }
-    
+
+    // Reconstruct library: top cards, then rest, then bottom cards
+    let mut new_library = to_top;
+    new_library.extend(library.drain(0..));
+    new_library.extend(to_bottom);
+
     *library = new_library;
 }
 
@@ -210,11 +199,11 @@ mod tests {
         let db = CardDatabase::from_file("cards.json").expect("Failed to load cards");
 
         // Test known mill enablers
-        let supplier = db.get_card("Stitcher's Supplier").expect("Supplier should exist");
-        assert!(is_mill_enabler(&supplier));
-
         let town_greeter = db.get_card("Town Greeter").expect("Town Greeter should exist");
         assert!(is_mill_enabler(&town_greeter));
+
+        let overlord = db.get_card("Overlord of the Balemurk").expect("Overlord should exist");
+        assert!(is_mill_enabler(&overlord));
 
         // Test non-enabler
         let forest = db.get_card("Forest").expect("Forest should exist");
@@ -236,10 +225,10 @@ mod tests {
     fn test_should_mulligan_with_enabler() {
         let db = CardDatabase::from_file("cards.json").expect("Failed to load cards");
         let forest = db.get_card("Forest").expect("Forest should exist");
-        let supplier = db.get_card("Stitcher's Supplier").expect("Supplier should exist");
+        let town_greeter = db.get_card("Town Greeter").expect("Town Greeter should exist");
 
         // Hand with 1 land but has mill enabler - should keep
-        let hand = vec![forest.clone(), supplier.clone(), forest.clone(), forest.clone(), forest.clone(), forest.clone(), forest.clone()];
+        let hand = vec![forest.clone(), town_greeter.clone(), forest.clone(), forest.clone(), forest.clone(), forest.clone(), forest.clone()];
         assert!(!should_mulligan(&hand, 0), "Hand with enabler should keep");
     }
 
