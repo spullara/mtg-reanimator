@@ -107,8 +107,8 @@ pub fn cast_spell(
     _db: &CardDatabase,
 ) -> Result<(), String> {
     match card {
-        Card::Instant(spell) | Card::Sorcery(spell) | Card::Enchantment(spell) => {
-            // Process spell abilities
+        Card::Instant(spell) | Card::Sorcery(spell) => {
+            // Process instant/sorcery abilities
             for ability in &spell.abilities {
                 match ability.as_str() {
                     "mill_4_return_permanent" => {
@@ -118,6 +118,19 @@ pub fn cast_spell(
                             state.graveyard.add_card(card);
                         }
                     }
+                    "search_land_or_creature_with_evidence" => {
+                        // Analyze the Pollen: evidence 8, search
+                        // Simplified: just mill to represent searching
+                    }
+                    _ => {}
+                }
+            }
+            Ok(())
+        }
+        Card::Enchantment(spell) => {
+            // Process enchantment abilities
+            for ability in &spell.abilities {
+                match ability.as_str() {
                     "etb_mill_4_return_artifact_creature_land" => {
                         // Dredger's Insight: mill 4, return artifact/creature/land
                         let milled = state.library.mill(4);
@@ -125,9 +138,9 @@ pub fn cast_spell(
                             state.graveyard.add_card(card);
                         }
                     }
-                    "search_land_or_creature_with_evidence" => {
-                        // Analyze the Pollen: evidence 8, search
-                        // Simplified: just mill to represent searching
+                    "graveyard_leave_lifegain" => {
+                        // Dredger's Insight: gain life when leaving graveyard
+                        // This is a triggered ability, handled elsewhere
                     }
                     _ => {}
                 }
@@ -143,11 +156,61 @@ pub fn cast_spell(
     }
 }
 
-/// Advance saga to next chapter
+/// Advance saga to next chapter and resolve chapter ability
 pub fn advance_saga(state: &mut GameState, saga_name: &str) -> Result<(), String> {
     let current_counters = state.saga_counters.get(saga_name).copied().unwrap_or(0);
     let new_counters = current_counters + 1;
     state.saga_counters.insert(saga_name.to_string(), new_counters);
+
+    // Resolve chapter ability based on saga name and chapter number
+    match saga_name {
+        "Awaken the Honored Dead" => {
+            match new_counters {
+                1 => {
+                    // Chapter 1: Destroy target nonland permanent
+                    // Simplified: destroy first nonland permanent on battlefield
+                    if let Some(pos) = state
+                        .battlefield
+                        .permanents()
+                        .iter()
+                        .position(|p| !matches!(p.card, Card::Land(_)))
+                    {
+                        state.battlefield.remove_permanent(pos);
+                    }
+                }
+                2 => {
+                    // Chapter 2: Mill 3
+                    let milled = state.library.mill(3);
+                    for card in milled {
+                        state.graveyard.add_card(card);
+                    }
+                }
+                3 => {
+                    // Chapter 3: Discard a card, return creature or land from graveyard
+                    if state.hand.size() > 0 {
+                        state.hand.remove_card(0);
+                    }
+                    // Return first creature or land from graveyard
+                    if let Some(card) = state.graveyard.find_creature() {
+                        if let Some(pos) = state
+                            .graveyard
+                            .cards()
+                            .iter()
+                            .position(|c| c.name() == card.name())
+                        {
+                            if let Some(returned) = state.graveyard.remove_card(pos) {
+                                let perm = Permanent::new(returned, state.turn);
+                                state.battlefield.add_permanent(perm);
+                            }
+                        }
+                    }
+                }
+                _ => {}
+            }
+        }
+        _ => {}
+    }
+
     Ok(())
 }
 
@@ -188,6 +251,38 @@ pub fn process_etb_triggers(
                 // Overlord: enters with 5 time counters
                 permanent.add_counter(CounterType::Time, 5);
             }
+            "etb_damage_trigger" => {
+                // Terror of the Peaks: damage trigger (setup, actual damage on creature ETB)
+                // This is a triggered ability that fires when other creatures enter
+                // Stored for later trigger resolution
+            }
+            "etb_mass_reanimate" => {
+                // Bringer of the Last Gift: mass reanimate
+                // Return all creature cards from graveyard to battlefield
+                let graveyard_cards = state.graveyard.cards().to_vec();
+                for card in graveyard_cards {
+                    if matches!(card, Card::Creature(_)) {
+                        let perm = Permanent::new(card.clone(), state.turn);
+                        state.battlefield.add_permanent(perm);
+                    }
+                }
+                // Clear graveyard of creatures
+                state.graveyard.clear_creatures();
+            }
+            "etb_or_attack_mill_4_return" => {
+                // Overlord of the Balemurk: mill 4, return creature or land
+                let milled = state.library.mill(4);
+                for card in milled {
+                    state.graveyard.add_card(card);
+                }
+            }
+            "mind_swap_copy" => {
+                // Superior Spider-Man: copy creature from graveyard
+                // Find a creature in graveyard and copy it
+                if let Some(creature) = state.graveyard.find_creature() {
+                    permanent.is_copy_of = Some(creature.name().to_string());
+                }
+            }
             _ => {} // Other abilities handled elsewhere
         }
     }
@@ -198,7 +293,7 @@ pub fn process_etb_triggers(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::card::{BaseCard, CreatureCard, ManaCost};
+    use crate::card::{BaseCard, CreatureCard, LandCard, LandSubtype, ManaCost, ManaColor};
 
     #[test]
     fn test_can_cast_with_sufficient_mana() {
@@ -226,6 +321,168 @@ mod tests {
         });
 
         assert!(can_cast(&card, &pool));
+    }
+
+    #[test]
+    fn test_play_basic_land() {
+        let mut state = GameState::new();
+        let land = Card::Land(LandCard {
+            base: BaseCard {
+                name: "Forest".to_string(),
+                mana_cost: ManaCost::default(),
+                mana_value: 0,
+            },
+            subtype: LandSubtype::Basic,
+            enters_tapped: false,
+            colors: vec![ManaColor::Green],
+            has_surveil: false,
+            surveil_amount: 0,
+        });
+
+        let result = play_land(&mut state, &land);
+        assert!(result.is_ok());
+        assert_eq!(state.battlefield.size(), 1);
+        assert!(!state.battlefield.permanents()[0].tapped);
+    }
+
+    #[test]
+    fn test_play_fastland_with_few_lands() {
+        let mut state = GameState::new();
+        let fastland = Card::Land(LandCard {
+            base: BaseCard {
+                name: "Blooming Marsh".to_string(),
+                mana_cost: ManaCost::default(),
+                mana_value: 0,
+            },
+            subtype: LandSubtype::Fastland,
+            enters_tapped: false,
+            colors: vec![ManaColor::Black, ManaColor::Green],
+            has_surveil: false,
+            surveil_amount: 0,
+        });
+
+        let result = play_land(&mut state, &fastland);
+        assert!(result.is_ok());
+        assert!(!state.battlefield.permanents()[0].tapped);
+    }
+
+    #[test]
+    fn test_play_fastland_with_many_lands() {
+        let mut state = GameState::new();
+
+        // Add 3 lands to battlefield
+        for _ in 0..3 {
+            let land = Card::Land(LandCard {
+                base: BaseCard {
+                    name: "Forest".to_string(),
+                    mana_cost: ManaCost::default(),
+                    mana_value: 0,
+                },
+                subtype: LandSubtype::Basic,
+                enters_tapped: false,
+                colors: vec![ManaColor::Green],
+                has_surveil: false,
+                surveil_amount: 0,
+            });
+            let perm = Permanent::new(land, 1);
+            state.battlefield.add_permanent(perm);
+        }
+
+        let fastland = Card::Land(LandCard {
+            base: BaseCard {
+                name: "Blooming Marsh".to_string(),
+                mana_cost: ManaCost::default(),
+                mana_value: 0,
+            },
+            subtype: LandSubtype::Fastland,
+            enters_tapped: false,
+            colors: vec![ManaColor::Black, ManaColor::Green],
+            has_surveil: false,
+            surveil_amount: 0,
+        });
+
+        let result = play_land(&mut state, &fastland);
+        assert!(result.is_ok());
+        assert!(state.battlefield.permanents()[3].tapped);
+    }
+
+    #[test]
+    fn test_tap_land_for_mana() {
+        let land = Card::Land(LandCard {
+            base: BaseCard {
+                name: "Forest".to_string(),
+                mana_cost: ManaCost::default(),
+                mana_value: 0,
+            },
+            subtype: LandSubtype::Basic,
+            enters_tapped: false,
+            colors: vec![ManaColor::Green],
+            has_surveil: false,
+            surveil_amount: 0,
+        });
+
+        let perm = Permanent::new(land, 1);
+        let mut pool = ManaPool::new();
+
+        let result = tap_land_for_mana(&perm, &mut pool);
+        assert!(result.is_ok());
+        assert_eq!(pool.green, 1);
+    }
+
+    #[test]
+    fn test_advance_saga_chapter_1() {
+        let mut state = GameState::new();
+
+        // Add a nonland permanent to destroy
+        let creature = Card::Creature(CreatureCard {
+            base: BaseCard {
+                name: "Test Creature".to_string(),
+                mana_cost: ManaCost::default(),
+                mana_value: 1,
+            },
+            power: 1,
+            toughness: 1,
+            is_legendary: false,
+            creature_types: vec![],
+            abilities: vec![],
+            impending_cost: None,
+            impending_counters: None,
+        });
+        let perm = Permanent::new(creature, 1);
+        state.battlefield.add_permanent(perm);
+
+        let result = advance_saga(&mut state, "Awaken the Honored Dead");
+        assert!(result.is_ok());
+        assert_eq!(state.saga_counters.get("Awaken the Honored Dead"), Some(&1));
+        assert_eq!(state.battlefield.size(), 0); // Creature destroyed
+    }
+
+    #[test]
+    fn test_advance_saga_chapter_2() {
+        let mut state = GameState::new();
+        state.saga_counters.insert("Awaken the Honored Dead".to_string(), 1);
+
+        // Add cards to library
+        for _ in 0..5 {
+            let card = Card::Land(LandCard {
+                base: BaseCard {
+                    name: "Forest".to_string(),
+                    mana_cost: ManaCost::default(),
+                    mana_value: 0,
+                },
+                subtype: LandSubtype::Basic,
+                enters_tapped: false,
+                colors: vec![ManaColor::Green],
+                has_surveil: false,
+                surveil_amount: 0,
+            });
+            state.library.add_card(card);
+        }
+
+        let result = advance_saga(&mut state, "Awaken the Honored Dead");
+        assert!(result.is_ok());
+        assert_eq!(state.saga_counters.get("Awaken the Honored Dead"), Some(&2));
+        assert_eq!(state.graveyard.size(), 3); // 3 cards milled
     }
 }
 

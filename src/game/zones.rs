@@ -165,6 +165,25 @@ impl Graveyard {
     pub fn cards(&self) -> &[Card] {
         &self.cards
     }
+
+    pub fn find_creature(&self) -> Option<Card> {
+        self.cards
+            .iter()
+            .find(|c| matches!(c, Card::Creature(_)))
+            .cloned()
+    }
+
+    pub fn clear_creatures(&mut self) {
+        self.cards.retain(|c| !matches!(c, Card::Creature(_)));
+    }
+
+    pub fn remove_card(&mut self, index: usize) -> Option<Card> {
+        if index < self.cards.len() {
+            Some(self.cards.remove(index))
+        } else {
+            None
+        }
+    }
 }
 
 /// Battlefield - permanents in play
