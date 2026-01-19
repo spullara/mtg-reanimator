@@ -1,6 +1,7 @@
 mod card;
 mod cli;
 mod game;
+mod rng;
 mod simulation;
 
 use card::CardDatabase;
