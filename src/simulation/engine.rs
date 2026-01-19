@@ -1,6 +1,8 @@
 use crate::card::{Card, CardDatabase};
 use crate::game::state::GameState;
 use crate::game::turns::{start_turn, draw_phase, upkeep_phase, end_phase};
+use crate::game::cards;
+use crate::simulation::decisions::DecisionEngine;
 use crate::rng::GameRng;
 use crate::simulation::mulligan::resolve_mulligans;
 
@@ -101,35 +103,152 @@ pub fn simulate_combat(state: &mut GameState) -> u32 {
 }
 
 /// Execute a single turn: untap -> draw -> main -> combat -> end
-pub fn execute_turn(state: &mut GameState, _db: &CardDatabase) -> u32 {
+pub fn execute_turn(state: &mut GameState, db: &CardDatabase) -> u32 {
     // Start turn: increment turn counter, untap, reset land drop
     start_turn(state);
-    
+
     // Upkeep phase
     upkeep_phase(state);
-    
+
     // Draw phase
     state.phase = crate::game::state::Phase::Draw;
     draw_phase(state);
-    
-    // Main phase 1
+
+    // Main phase 1: Play lands and cast spells
     state.phase = crate::game::state::Phase::Main1;
-    // Main phase logic would go here (casting spells, playing lands)
-    // For now, we just pass through
-    
+    execute_main_phase(state, db);
+
     // Combat phase
     state.phase = crate::game::state::Phase::Combat;
     let combat_damage = simulate_combat(state);
-    
-    // Main phase 2
+
+    // Main phase 2: Additional spell casting could happen here
     state.phase = crate::game::state::Phase::Main2;
-    // Additional spell casting could happen here
-    
+    // For now, we don't do anything in main 2
+
     // End phase
     state.phase = crate::game::state::Phase::End;
     end_phase(state);
-    
+
     combat_damage
+}
+
+/// Get mana cost from a card
+fn get_mana_cost(card: &Card) -> &crate::card::ManaCost {
+    match card {
+        Card::Land(c) => &c.base.mana_cost,
+        Card::Creature(c) => &c.base.mana_cost,
+        Card::Instant(c) => &c.base.mana_cost,
+        Card::Sorcery(c) => &c.base.mana_cost,
+        Card::Enchantment(c) => &c.base.mana_cost,
+        Card::Saga(c) => &c.base.mana_cost,
+    }
+}
+
+/// Execute main phase: play lands and cast spells
+fn execute_main_phase(state: &mut GameState, db: &CardDatabase) {
+    // Step 1: Tap all untapped lands for mana
+    let mut lands_to_tap = Vec::new();
+    for (idx, permanent) in state.battlefield.permanents().iter().enumerate() {
+        if matches!(permanent.card, Card::Land(_)) && !permanent.tapped {
+            lands_to_tap.push(idx);
+        }
+    }
+
+    // Tap lands and add mana to pool
+    for idx in lands_to_tap {
+        if let Some(permanent) = state.battlefield.permanents_mut().get_mut(idx) {
+            let _ = cards::tap_land_for_mana(permanent, &mut state.mana_pool);
+        }
+    }
+
+    // Step 2: Play one land if we haven't already
+    if !state.land_played_this_turn {
+        let hand_cards = state.hand.cards().to_vec();
+        if let Some(land_idx) = DecisionEngine::choose_land_to_play(&hand_cards, state) {
+            if let Some(card) = state.hand.remove_card(land_idx) {
+                let _ = cards::play_land(state, &card);
+            }
+        }
+    }
+
+    // Step 3: Check if combo is ready (Spider-Man + Bringer in graveyard + 4+ mana)
+    if DecisionEngine::is_combo_ready(state) {
+        // Cast Spider-Man to trigger the combo
+        let hand_cards = state.hand.cards().to_vec();
+        if let Some(spider_idx) = hand_cards.iter().position(|c| c.name() == "Superior Spider-Man") {
+            if let Some(card) = state.hand.remove_card(spider_idx) {
+                // Pay mana for Spider-Man
+                let cost = get_mana_cost(&card);
+                if state.mana_pool.pay(cost) {
+                    // Cast as creature
+                    let _ = cards::cast_creature(state, &card, false);
+
+                    // Process ETB triggers (this will copy Bringer and trigger mass reanimate)
+                    // We need to get the permanent index first to avoid double borrow
+                    let perm_idx = state.battlefield.permanents().len().saturating_sub(1);
+                    if perm_idx < state.battlefield.permanents().len() {
+                        let mut perm = state.battlefield.permanents_mut()[perm_idx].clone();
+                        let _ = cards::process_etb_triggers(state, &mut perm, db);
+                        state.battlefield.permanents_mut()[perm_idx] = perm;
+                    }
+                }
+            }
+        }
+        return; // Stop casting after combo
+    }
+
+    // Step 4: Cast spells from hand until we run out of mana or cards
+    loop {
+        let hand_cards = state.hand.cards().to_vec();
+
+        // Find the best card to play
+        if let Some(card_idx) = DecisionEngine::choose_card_to_play(&hand_cards, state, db) {
+            let card = hand_cards[card_idx].clone();
+
+            // Check if we can cast it
+            if !cards::can_cast(&card, &state.mana_pool) {
+                break; // Can't cast anything else
+            }
+
+            // Remove from hand
+            let _ = state.hand.remove_card(card_idx);
+
+            // Pay mana
+            let cost = get_mana_cost(&card);
+            if !state.mana_pool.pay(cost) {
+                // Put it back if we can't pay
+                state.hand.add_card(card);
+                break;
+            }
+
+            // Cast the card based on type
+            match &card {
+                Card::Creature(_) => {
+                    let _ = cards::cast_creature(state, &card, false);
+
+                    // Process ETB triggers
+                    let perm_idx = state.battlefield.permanents().len().saturating_sub(1);
+                    if perm_idx < state.battlefield.permanents().len() {
+                        let mut perm = state.battlefield.permanents_mut()[perm_idx].clone();
+                        let _ = cards::process_etb_triggers(state, &mut perm, db);
+                        state.battlefield.permanents_mut()[perm_idx] = perm;
+                    }
+                }
+                Card::Land(_) => {
+                    let _ = cards::play_land(state, &card);
+                }
+                Card::Instant(_) | Card::Sorcery(_) | Card::Enchantment(_) => {
+                    let _ = cards::cast_spell(state, &card, db);
+                }
+                Card::Saga(_) => {
+                    let _ = cards::cast_spell(state, &card, db);
+                }
+            }
+        } else {
+            break; // No more cards to play
+        }
+    }
 }
 
 /// Run a complete game simulation
