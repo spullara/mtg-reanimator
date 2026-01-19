@@ -3,6 +3,22 @@ use crate::game::mana::ManaPool;
 use crate::game::state::GameState;
 use crate::game::zones::{CounterType, Permanent};
 
+/// Check if a creature has impending counters (enters as enchantment)
+pub fn has_impending(card: &Card) -> bool {
+    match card {
+        Card::Creature(c) => c.impending_counters.is_some(),
+        _ => false,
+    }
+}
+
+/// Get impending counter count for a creature
+pub fn get_impending_counters(card: &Card) -> u32 {
+    match card {
+        Card::Creature(c) => c.impending_counters.unwrap_or(0),
+        _ => 0,
+    }
+}
+
 /// Check if a card can be cast with the current mana pool
 pub fn can_cast(card: &Card, mana_pool: &ManaPool) -> bool {
     let cost = match card {
@@ -97,6 +113,29 @@ pub fn tap_land_for_mana(permanent: &Permanent, mana_pool: &mut ManaPool) -> Res
         }
     }
 
+    Ok(())
+}
+
+/// Cast a creature, handling impending logic
+pub fn cast_creature(
+    state: &mut GameState,
+    card: &Card,
+    use_impending: bool,
+) -> Result<(), String> {
+    match card {
+        Card::Creature(_) => {},
+        _ => return Err("Not a creature card".to_string()),
+    };
+
+    let mut permanent = Permanent::new(card.clone(), state.turn);
+
+    // Handle impending creatures
+    if use_impending && has_impending(card) {
+        let counters = get_impending_counters(card);
+        permanent.add_counter(CounterType::Time, counters);
+    }
+
+    state.battlefield.add_permanent(permanent);
     Ok(())
 }
 
