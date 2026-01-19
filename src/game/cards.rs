@@ -523,5 +523,111 @@ mod tests {
         assert_eq!(state.saga_counters.get("Awaken the Honored Dead"), Some(&2));
         assert_eq!(state.graveyard.size(), 3); // 3 cards milled
     }
+
+    #[test]
+    fn test_has_impending() {
+        let impending_creature = Card::Creature(CreatureCard {
+            base: BaseCard {
+                name: "Overlord".to_string(),
+                mana_cost: ManaCost::default(),
+                mana_value: 5,
+            },
+            power: 5,
+            toughness: 5,
+            is_legendary: false,
+            creature_types: vec![],
+            abilities: vec![],
+            impending_cost: Some(ManaCost::default()),
+            impending_counters: Some(5),
+        });
+
+        let normal_creature = Card::Creature(CreatureCard {
+            base: BaseCard {
+                name: "Test".to_string(),
+                mana_cost: ManaCost::default(),
+                mana_value: 2,
+            },
+            power: 2,
+            toughness: 2,
+            is_legendary: false,
+            creature_types: vec![],
+            abilities: vec![],
+            impending_cost: None,
+            impending_counters: None,
+        });
+
+        assert!(has_impending(&impending_creature));
+        assert!(!has_impending(&normal_creature));
+    }
+
+    #[test]
+    fn test_get_impending_counters() {
+        let impending_creature = Card::Creature(CreatureCard {
+            base: BaseCard {
+                name: "Overlord".to_string(),
+                mana_cost: ManaCost::default(),
+                mana_value: 5,
+            },
+            power: 5,
+            toughness: 5,
+            is_legendary: false,
+            creature_types: vec![],
+            abilities: vec![],
+            impending_cost: Some(ManaCost::default()),
+            impending_counters: Some(5),
+        });
+
+        assert_eq!(get_impending_counters(&impending_creature), 5);
+    }
+
+    #[test]
+    fn test_cast_creature_with_impending() {
+        let mut state = GameState::new();
+        let impending_creature = Card::Creature(CreatureCard {
+            base: BaseCard {
+                name: "Overlord".to_string(),
+                mana_cost: ManaCost::default(),
+                mana_value: 5,
+            },
+            power: 5,
+            toughness: 5,
+            is_legendary: false,
+            creature_types: vec![],
+            abilities: vec![],
+            impending_cost: Some(ManaCost::default()),
+            impending_counters: Some(5),
+        });
+
+        let result = cast_creature(&mut state, &impending_creature, true);
+        assert!(result.is_ok());
+        assert_eq!(state.battlefield.size(), 1);
+        let perm = &state.battlefield.permanents()[0];
+        assert_eq!(perm.get_counter(CounterType::Time), 5);
+    }
+
+    #[test]
+    fn test_cast_creature_without_impending() {
+        let mut state = GameState::new();
+        let impending_creature = Card::Creature(CreatureCard {
+            base: BaseCard {
+                name: "Overlord".to_string(),
+                mana_cost: ManaCost::default(),
+                mana_value: 5,
+            },
+            power: 5,
+            toughness: 5,
+            is_legendary: false,
+            creature_types: vec![],
+            abilities: vec![],
+            impending_cost: Some(ManaCost::default()),
+            impending_counters: Some(5),
+        });
+
+        let result = cast_creature(&mut state, &impending_creature, false);
+        assert!(result.is_ok());
+        assert_eq!(state.battlefield.size(), 1);
+        let perm = &state.battlefield.permanents()[0];
+        assert_eq!(perm.get_counter(CounterType::Time), 0);
+    }
 }
 
