@@ -1,3 +1,4 @@
+pub mod analyze;
 pub mod deck;
 pub mod mulligan;
 pub mod decisions;

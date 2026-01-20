@@ -80,6 +80,21 @@ enum Commands {
         #[arg(short, long, default_value = "weighted")]
         strategy: String,
     },
+
+    /// Analyze turn 4 combo failure reasons
+    Analyze {
+        /// Number of games to simulate
+        #[arg(short, long, default_value = "1000")]
+        num_games: usize,
+
+        /// Deck file to use
+        #[arg(short, long, default_value = "deck.txt")]
+        deck: String,
+
+        /// Seed for reproducibility
+        #[arg(short, long)]
+        seed: Option<u64>,
+    },
 }
 
 fn main() {
@@ -115,6 +130,9 @@ fn main() {
         }
         Some(Commands::Optimize { configs, games, strategy }) => {
             optimize_lands(&db, configs, games, &strategy);
+        }
+        Some(Commands::Analyze { num_games, deck, seed }) => {
+            analyze_turn4_failures(&db, &deck, num_games, seed);
         }
         None => {
             // Default: run simulation with CLI args
@@ -495,4 +513,91 @@ fn optimize_lands(db: &CardDatabase, num_configs: usize, games_per_config: usize
             Err(e) => eprintln!("\nFailed to save deck: {}", e),
         }
     }
+}
+
+fn analyze_turn4_failures(db: &CardDatabase, deck_file: &str, num_games: usize, seed: Option<u64>) {
+    use simulation::analyze::{run_game_to_turn4, aggregate_results, FailureReason};
+
+    let deck = match parse_deck_file(deck_file, db) {
+        Ok(deck) => deck,
+        Err(e) => {
+            eprintln!("✗ Failed to parse deck file '{}': {}", deck_file, e);
+            std::process::exit(1);
+        }
+    };
+
+    println!("\n=== Turn 4 Combo Failure Analysis ===\n");
+    println!("Deck: {} ({} cards)", deck_file, deck.len());
+    println!("Games: {}", num_games);
+    if let Some(s) = seed {
+        println!("Seed: {}", s);
+    }
+    println!();
+
+    let start = std::time::Instant::now();
+
+    // Run games in parallel
+    let analyses: Vec<_> = if let Some(base_seed) = seed {
+        (0..num_games)
+            .into_par_iter()
+            .map(|i| run_game_to_turn4(&deck, base_seed + i as u64, db))
+            .collect()
+    } else {
+        (0..num_games)
+            .into_par_iter()
+            .map(|i| {
+                let seed = (std::time::SystemTime::now()
+                    .duration_since(std::time::UNIX_EPOCH)
+                    .unwrap()
+                    .as_nanos() as u64)
+                    .wrapping_add(i as u64);
+                run_game_to_turn4(&deck, seed, db)
+            })
+            .collect()
+    };
+
+    let elapsed = start.elapsed();
+
+    // Aggregate results
+    let results = aggregate_results(&analyses);
+
+    println!("=== Results ===\n");
+
+    // Sort failures by count (descending)
+    let mut failures: Vec<_> = results.failure_counts.iter().collect();
+    failures.sort_by(|a, b| b.1.cmp(a.1));
+
+    // Print ranked failure reasons
+    println!("Failure Reasons (ranked by frequency):\n");
+    for (reason, count) in &failures {
+        let pct = **count as f64 / num_games as f64 * 100.0;
+        let bar = "█".repeat((pct / 2.0) as usize);
+
+        if **reason == FailureReason::ComboAvailable {
+            println!("  {:30} {:5.1}% {} ({})",
+                format!("{}", reason), pct, bar, count);
+        } else {
+            println!("  {:30} {:5.1}% {} ({})",
+                format!("{}", reason), pct, bar, count);
+        }
+    }
+
+    println!("\n--- Statistics ---\n");
+    println!("Average lands by turn 4: {:.2}", results.avg_lands);
+    println!("Color availability:");
+    println!("  Blue:  {:5.1}%", results.color_availability.0);
+    println!("  Black: {:5.1}%", results.color_availability.1);
+    println!("  Green: {:5.1}%", results.color_availability.2);
+
+    // Calculate additional stats from raw analyses
+    let combo_ready = failures.iter()
+        .find(|(r, _)| **r == FailureReason::ComboAvailable)
+        .map(|(_, c)| **c)
+        .unwrap_or(0);
+
+    println!("\nTurn 4 combo ready: {:.1}% ({}/{})",
+        combo_ready as f64 / num_games as f64 * 100.0, combo_ready, num_games);
+
+    println!("\nCompleted in {:.2?} ({:.0} games/sec)",
+        elapsed, num_games as f64 / elapsed.as_secs_f64());
 }
