@@ -10,8 +10,6 @@ pub enum CardDatabaseError {
     JsonError(#[from] serde_json::Error),
     #[error("Card not found: {0}")]
     CardNotFound(String),
-    #[error("Invalid card data: {0}")]
-    InvalidCard(String),
 }
 
 /// Card database that loads cards from JSON
@@ -42,26 +40,12 @@ impl CardDatabase {
             .ok_or_else(|| CardDatabaseError::CardNotFound(name.to_string()))
     }
 
-    /// Get all card names
-    pub fn card_names(&self) -> Vec<&str> {
-        self.cards.keys().map(|s| s.as_str()).collect()
-    }
-
     /// Get total number of cards
     pub fn card_count(&self) -> usize {
         self.cards.len()
     }
 
-    /// Validate that all referenced abilities exist
-    pub fn validate(&self) -> Result<(), CardDatabaseError> {
-        // For now, just check that we have cards loaded
-        if self.cards.is_empty() {
-            return Err(CardDatabaseError::InvalidCard(
-                "No cards loaded".to_string(),
-            ));
-        }
-        Ok(())
-    }
+
 }
 
 #[cfg(test)]
@@ -86,19 +70,6 @@ mod tests {
         let db = CardDatabase::from_file("cards.json").expect("Failed to load cards");
         let result = db.get_card("Nonexistent Card");
         assert!(result.is_err());
-    }
-
-    #[test]
-    fn test_all_cards_accessible() {
-        let db = CardDatabase::from_file("cards.json").expect("Failed to load cards");
-        let names = db.card_names();
-        assert!(names.len() > 0, "Should have card names");
-
-        // Verify we can get each card
-        for name in names {
-            let card = db.get_card(name).expect(&format!("Should get card: {}", name));
-            assert_eq!(card.name(), name);
-        }
     }
 }
 

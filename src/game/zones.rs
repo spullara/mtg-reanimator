@@ -32,11 +32,6 @@ impl Permanent {
         }
     }
 
-    pub fn with_tapped(mut self, tapped: bool) -> Self {
-        self.tapped = tapped;
-        self
-    }
-
     pub fn add_counter(&mut self, counter_type: CounterType, amount: u32) {
         *self.counters.entry(counter_type).or_insert(0) += amount;
     }
@@ -74,11 +69,6 @@ impl Library {
         self.cards.push(card);
     }
 
-    /// Add a card to the top of the library (front of the vec)
-    pub fn add_to_top(&mut self, card: Card) {
-        self.cards.insert(0, card);
-    }
-
     /// Peek at the top card without removing it
     pub fn peek_top(&self) -> Option<&Card> {
         self.cards.first()
@@ -110,10 +100,8 @@ impl Library {
         self.cards.is_empty()
     }
 
-    pub fn shuffle(&mut self) {
-        use rand::seq::SliceRandom;
-        let mut rng = rand::thread_rng();
-        self.cards.shuffle(&mut rng);
+    pub fn shuffle(&mut self, rng: &mut crate::rng::GameRng) {
+        rng.shuffle(&mut self.cards);
     }
 
     pub fn cards(&self) -> &[Card] {
@@ -148,10 +136,6 @@ impl Hand {
         }
     }
 
-    pub fn find_card(&self, name: &str) -> Option<usize> {
-        self.cards.iter().position(|c| c.name() == name)
-    }
-
     pub fn size(&self) -> usize {
         self.cards.len()
     }
@@ -176,19 +160,8 @@ impl Graveyard {
         self.cards.push(card);
     }
 
-    pub fn size(&self) -> usize {
-        self.cards.len()
-    }
-
     pub fn cards(&self) -> &[Card] {
         &self.cards
-    }
-
-    pub fn find_creature(&self) -> Option<Card> {
-        self.cards
-            .iter()
-            .find(|c| matches!(c, Card::Creature(_)))
-            .cloned()
     }
 
     pub fn clear_creatures(&mut self) {
@@ -229,10 +202,6 @@ impl Battlefield {
         }
     }
 
-    pub fn size(&self) -> usize {
-        self.permanents.len()
-    }
-
     pub fn permanents(&self) -> &[Permanent] {
         &self.permanents
     }
@@ -257,12 +226,6 @@ impl Exile {
         self.cards.push(card);
     }
 
-    pub fn size(&self) -> usize {
-        self.cards.len()
-    }
 
-    pub fn cards(&self) -> &[Card] {
-        &self.cards
-    }
 }
 

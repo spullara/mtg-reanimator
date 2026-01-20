@@ -25,10 +25,6 @@ impl ManaPool {
         }
     }
 
-    pub fn empty() -> Self {
-        Self::new()
-    }
-
     /// Add mana of a specific color
     pub fn add_mana(&mut self, color: char, amount: u32) {
         match color {
@@ -40,11 +36,6 @@ impl ManaPool {
             'C' => self.colorless += amount,
             _ => {}
         }
-    }
-
-    /// Get total mana available
-    pub fn total(&self) -> u32 {
-        self.white + self.blue + self.black + self.red + self.green + self.colorless
     }
 
     /// Check if we can pay a mana cost
@@ -486,7 +477,6 @@ mod tests {
         pool.add_mana('U', 1);
         assert_eq!(pool.white, 2);
         assert_eq!(pool.blue, 1);
-        assert_eq!(pool.total(), 3);
     }
 
     #[test]

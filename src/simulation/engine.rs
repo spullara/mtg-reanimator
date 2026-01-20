@@ -12,18 +12,6 @@ use crate::simulation::mulligan::resolve_mulligans;
 pub struct GameResult {
     /// Turn on which the game was won (None if didn't win by turn 20)
     pub win_turn: Option<u32>,
-    /// Whether we were on the play (true) or draw (false)
-    pub on_the_play: bool,
-    /// Total damage dealt via combat
-    pub total_combat_damage: u32,
-    /// Total damage dealt via non-combat sources (combo)
-    pub combo_damage: u32,
-    /// First turn we had access to U mana
-    pub turn_with_u: Option<u32>,
-    /// First turn we had access to B mana
-    pub turn_with_b: Option<u32>,
-    /// First turn we had access to G mana
-    pub turn_with_g: Option<u32>,
     /// First turn we had access to U, B, and G mana
     pub turn_with_ubg: Option<u32>,
 }
@@ -97,7 +85,7 @@ pub fn simulate_combat(state: &mut GameState, verbose: bool) -> u32 {
 }
 
 /// Execute a single turn: untap -> draw -> main -> combat -> end
-pub fn execute_turn(state: &mut GameState, db: &CardDatabase, verbose: bool) -> u32 {
+pub fn execute_turn(state: &mut GameState, db: &CardDatabase, verbose: bool, rng: &mut crate::rng::GameRng) -> u32 {
     // Start turn: increment turn counter, untap, reset land drop
     start_turn(state);
 
@@ -130,7 +118,7 @@ pub fn execute_turn(state: &mut GameState, db: &CardDatabase, verbose: bool) -> 
         let hand_names: Vec<&str> = state.hand.cards().iter().map(|c| c.name()).collect();
         println!("[Main 1] Hand: {}", hand_names.join(", "));
     }
-    execute_main_phase(state, db, verbose);
+    execute_main_phase(state, db, verbose, rng);
 
     // Combat phase
     state.phase = crate::game::state::Phase::Combat;
@@ -184,7 +172,7 @@ fn get_mana_cost(card: &Card) -> &crate::card::ManaCost {
 
 /// Port of TypeScript mainPhase function (lines 2211-2502)
 /// Core game logic that determines what spells to cast and in what order
-pub fn main_phase(state: &mut GameState, db: &CardDatabase, verbose: bool) {
+pub fn main_phase(state: &mut GameState, db: &CardDatabase, verbose: bool, rng: &mut crate::rng::GameRng) {
     // SPECIAL CASE: Turn 4 combo check
     // If we have Spider-Man in hand, Bringer in GY, and can get to 4 mana by playing a land,
     // play the land FIRST before casting any other spells!
@@ -339,7 +327,7 @@ pub fn main_phase(state: &mut GameState, db: &CardDatabase, verbose: bool) {
                 // Sort by mana value (cheaper first)
                 castable_finders.sort_by_key(|(_, c)| c.mana_value());
 
-                let (spell_idx, spell) = castable_finders[0];
+                let (spell_idx, _spell) = castable_finders[0];
                 let lands_before = state.hand.cards().iter().filter(|c| matches!(c, Card::Land(_))).count();
 
                 // Remove from hand and cast
@@ -356,11 +344,11 @@ pub fn main_phase(state: &mut GameState, db: &CardDatabase, verbose: bool) {
                             let perm_idx = state.battlefield.permanents().len().saturating_sub(1);
                             if perm_idx < state.battlefield.permanents().len() {
                                 let mut perm = state.battlefield.permanents_mut()[perm_idx].clone();
-                                let _ = cards::process_etb_triggers_verbose(state, &mut perm, db, verbose);
+                                let _ = cards::process_etb_triggers_verbose(state, &mut perm, db, verbose, rng);
                                 state.battlefield.permanents_mut()[perm_idx] = perm;
                             }
                         } else {
-                            let _ = cards::cast_spell(state, &card, db, verbose);
+                            let _ = cards::cast_spell(state, &card, db, verbose, rng);
                         }
 
                         if verbose {
@@ -572,7 +560,7 @@ pub fn main_phase(state: &mut GameState, db: &CardDatabase, verbose: bool) {
                             let perm_idx = state.battlefield.permanents().len().saturating_sub(1);
                             if perm_idx < state.battlefield.permanents().len() {
                                 let mut perm = state.battlefield.permanents_mut()[perm_idx].clone();
-                                let _ = cards::process_etb_triggers_verbose(state, &mut perm, db, verbose);
+                                let _ = cards::process_etb_triggers_verbose(state, &mut perm, db, verbose, rng);
                                 state.battlefield.permanents_mut()[perm_idx] = perm;
                             }
 
@@ -591,7 +579,7 @@ pub fn main_phase(state: &mut GameState, db: &CardDatabase, verbose: bool) {
                             }
                         }
                         Card::Instant(_) | Card::Sorcery(_) | Card::Enchantment(_) | Card::Saga(_) => {
-                            let _ = cards::cast_spell(state, &card, db, verbose);
+                            let _ = cards::cast_spell(state, &card, db, verbose, rng);
                             if verbose {
                                 println!("  [Cast] {}", card_name);
                             }
@@ -609,10 +597,10 @@ pub fn main_phase(state: &mut GameState, db: &CardDatabase, verbose: bool) {
 }
 
 /// Execute main phase: play lands and cast spells
-fn execute_main_phase(state: &mut GameState, db: &CardDatabase, verbose: bool) {
+fn execute_main_phase(state: &mut GameState, db: &CardDatabase, verbose: bool, rng: &mut crate::rng::GameRng) {
     // DO NOT tap lands here - TypeScript taps lands DURING casting, not before
     // This means can_cast_spell checks untapped lands, and cast_spell taps them
-    main_phase(state, db, verbose);
+    main_phase(state, db, verbose, rng);
 }
 
 /// Run a complete game simulation
@@ -668,50 +656,24 @@ pub fn run_game(
     }
     
     // Game loop
-    let mut total_combat_damage = 0u32;
-    let mut combo_damage = 0u32;
     let max_turns = 20u32;
-    
-    let mut turn_with_u = None;
-    let mut turn_with_b = None;
-    let mut turn_with_g = None;
     let mut turn_with_ubg = None;
-    
-    while state.turn < max_turns && !check_win_condition(&state) {
-        let life_before = state.opponent_life;
 
+    while state.turn < max_turns && !check_win_condition(&state) {
         // Execute turn
-        let combat_damage = execute_turn(&mut state, _db, verbose);
-        total_combat_damage += combat_damage;
-        
-        // Track combo damage (non-combat damage)
-        let total_damage_this_turn = (life_before - state.opponent_life) as u32;
-        combo_damage += total_damage_this_turn.saturating_sub(combat_damage);
-        
-        // Track when colors become available
-        let colors = get_available_colors(&state);
-        if turn_with_u.is_none() && colors.has_blue() {
-            turn_with_u = Some(state.turn);
-        }
-        if turn_with_b.is_none() && colors.has_black() {
-            turn_with_b = Some(state.turn);
-        }
-        if turn_with_g.is_none() && colors.has_green() {
-            turn_with_g = Some(state.turn);
-        }
-        if turn_with_ubg.is_none() && colors.has_blue() && colors.has_black() && colors.has_green() {
-            turn_with_ubg = Some(state.turn);
+        execute_turn(&mut state, _db, verbose, &mut rng);
+
+        // Track when all colors become available
+        if turn_with_ubg.is_none() {
+            let colors = get_available_colors(&state);
+            if colors.has_blue() && colors.has_black() && colors.has_green() {
+                turn_with_ubg = Some(state.turn);
+            }
         }
     }
     
     GameResult {
         win_turn: if check_win_condition(&state) { Some(state.turn) } else { None },
-        on_the_play: state.on_the_play,
-        total_combat_damage,
-        combo_damage,
-        turn_with_u,
-        turn_with_b,
-        turn_with_g,
         turn_with_ubg,
     }
 }
@@ -719,7 +681,7 @@ pub fn run_game(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::card::{BaseCard, CreatureCard, LandCard};
+    use crate::card::types::{BaseCard, CreatureCard, LandCard};
 
     #[test]
     fn test_check_win_condition_false() {

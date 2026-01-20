@@ -31,7 +31,6 @@ impl Mulberry32 {
 #[derive(Clone)]
 pub struct GameRng {
     mulberry: Mulberry32,
-    seed: u64,
 }
 
 impl GameRng {
@@ -45,12 +44,7 @@ impl GameRng {
 
         // Use lower 32 bits for Mulberry32 (matches TypeScript behavior)
         let mulberry = Mulberry32::new(seed as u32);
-        GameRng { mulberry, seed }
-    }
-
-    /// Get the seed used for this RNG
-    pub fn seed(&self) -> u64 {
-        self.seed
+        GameRng { mulberry }
     }
 
     /// Generate a random number in range [0, 1)
@@ -115,13 +109,6 @@ mod tests {
         rng2.shuffle(&mut arr2);
 
         assert_eq!(arr1, arr2, "Same seed should produce same shuffle");
-    }
-
-    #[test]
-    fn test_seed_getter() {
-        let seed = 999;
-        let rng = GameRng::new(Some(seed));
-        assert_eq!(rng.seed(), seed);
     }
 
     #[test]

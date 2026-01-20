@@ -49,7 +49,6 @@ impl ManaColor {
 pub struct ColorFlags(pub u8);
 
 impl ColorFlags {
-    pub const NONE: u8 = 0;
     pub const WHITE: u8 = 1 << 0;
     pub const BLUE: u8 = 1 << 1;
     pub const BLACK: u8 = 1 << 2;
@@ -157,11 +156,7 @@ pub struct ManaCost {
     pub generic: u32,
 }
 
-impl ManaCost {
-    pub fn total_value(&self) -> u32 {
-        self.white + self.blue + self.black + self.red + self.green + self.colorless + self.generic
-    }
-}
+
 
 /// Card types in Magic
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]

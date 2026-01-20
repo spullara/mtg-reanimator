@@ -26,7 +26,6 @@ pub const FIXED_CARDS: &[(&str, usize)] = &[
     ("Analyze the Pollen", 1),
 ];
 
-pub const TOTAL_FIXED: usize = 36; // Sum of all fixed card counts
 pub const TOTAL_LANDS: usize = 24; // 60 - 36
 
 /// Get all available land types with their constraints

@@ -10,7 +10,7 @@ use rayon::prelude::*;
 use simulation::deck::parse_deck_file;
 use simulation::engine::run_game;
 use std::collections::HashMap;
-use std::sync::atomic::{AtomicUsize, Ordering};
+
 
 #[derive(Parser)]
 #[command(name = "mtg-reanimator")]
