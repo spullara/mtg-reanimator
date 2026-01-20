@@ -271,8 +271,27 @@ pub fn main_phase(state: &mut GameState, db: &CardDatabase, verbose: bool) {
                 // Remove from hand and cast
                 if let Some(card) = state.hand.remove_card(spell_idx) {
                     let cost = get_mana_cost(&card);
-                    if state.mana_pool.pay(cost) {
-                        let _ = cards::cast_spell(state, &card, db);
+                    if mana::tap_lands_for_cost(cost, state, None) {
+                        let card_name = card.name().to_string();
+
+                        // Handle creatures specially (add to battlefield and process ETB)
+                        if matches!(&card, Card::Creature(_)) {
+                            let _ = cards::cast_creature(state, &card, false);
+
+                            // Process ETB triggers
+                            let perm_idx = state.battlefield.permanents().len().saturating_sub(1);
+                            if perm_idx < state.battlefield.permanents().len() {
+                                let mut perm = state.battlefield.permanents_mut()[perm_idx].clone();
+                                let _ = cards::process_etb_triggers_verbose(state, &mut perm, db, verbose);
+                                state.battlefield.permanents_mut()[perm_idx] = perm;
+                            }
+                        } else {
+                            let _ = cards::cast_spell(state, &card, db);
+                        }
+
+                        if verbose {
+                            println!("  [Cast] {}", card_name);
+                        }
                         cast_any = true;
 
                         // Check if we found a land
@@ -305,12 +324,8 @@ pub fn main_phase(state: &mut GameState, db: &CardDatabase, verbose: bool) {
                     let card_name = card.name().to_string();
                     let _ = cards::play_land(state, &card);
 
-                    // If the land enters untapped, tap it for mana
-                    if let Some(last_perm) = state.battlefield.permanents_mut().last_mut() {
-                        if !last_perm.tapped {
-                            let _ = cards::tap_land_for_mana(last_perm, &mut state.mana_pool);
-                        }
-                    }
+                    // DO NOT tap the land here - TypeScript taps lands DURING casting
+                    // This allows can_cast_spell to correctly see the new untapped land
 
                     if verbose {
                         let last_perm = state.battlefield.permanents().last();
@@ -449,10 +464,16 @@ pub fn main_phase(state: &mut GameState, db: &CardDatabase, verbose: bool) {
             let (spell_idx, _spell) = castable_spells[0];
 
             if let Some(card) = state.hand.remove_card(spell_idx) {
+                let card_name = card.name().to_string();
                 let cost = get_mana_cost(&card);
-                if state.mana_pool.pay(cost) {
-                    let card_name = card.name().to_string();
 
+                // Get for_creature for Cavern of Souls handling
+                let for_creature = match &card {
+                    Card::Creature(c) => Some(c),
+                    _ => None,
+                };
+
+                if mana::tap_lands_for_cost(cost, state, for_creature) {
                     match &card {
                         Card::Creature(_) => {
                             let _ = cards::cast_creature(state, &card, false);
@@ -461,7 +482,7 @@ pub fn main_phase(state: &mut GameState, db: &CardDatabase, verbose: bool) {
                             let perm_idx = state.battlefield.permanents().len().saturating_sub(1);
                             if perm_idx < state.battlefield.permanents().len() {
                                 let mut perm = state.battlefield.permanents_mut()[perm_idx].clone();
-                                let _ = cards::process_etb_triggers(state, &mut perm, db);
+                                let _ = cards::process_etb_triggers_verbose(state, &mut perm, db, verbose);
                                 state.battlefield.permanents_mut()[perm_idx] = perm;
                             }
 
@@ -495,23 +516,8 @@ pub fn main_phase(state: &mut GameState, db: &CardDatabase, verbose: bool) {
 
 /// Execute main phase: play lands and cast spells
 fn execute_main_phase(state: &mut GameState, db: &CardDatabase, verbose: bool) {
-    // BEFORE main phase, tap all untapped lands for mana
-    // This matches TypeScript behavior where lands are tapped before casting spells
-    let mut lands_to_tap = Vec::new();
-    for (idx, permanent) in state.battlefield.permanents().iter().enumerate() {
-        if matches!(permanent.card, Card::Land(_)) && !permanent.tapped {
-            lands_to_tap.push(idx);
-        }
-    }
-
-    // Tap lands and add mana to pool
-    for idx in lands_to_tap {
-        if let Some(permanent) = state.battlefield.permanents_mut().get_mut(idx) {
-            let _ = cards::tap_land_for_mana(permanent, &mut state.mana_pool);
-        }
-    }
-
-    // Call the new main_phase function
+    // DO NOT tap lands here - TypeScript taps lands DURING casting, not before
+    // This means can_cast_spell checks untapped lands, and cast_spell taps them
     main_phase(state, db, verbose);
 }
 

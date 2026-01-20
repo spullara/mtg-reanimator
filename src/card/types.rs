@@ -17,6 +17,20 @@ pub enum ManaColor {
     Colorless,
 }
 
+impl ManaColor {
+    /// Convert to the single character representation
+    pub fn to_char(&self) -> char {
+        match self {
+            ManaColor::White => 'W',
+            ManaColor::Blue => 'U',
+            ManaColor::Black => 'B',
+            ManaColor::Red => 'R',
+            ManaColor::Green => 'G',
+            ManaColor::Colorless => 'C',
+        }
+    }
+}
+
 /// Mana cost for a card
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
 pub struct ManaCost {

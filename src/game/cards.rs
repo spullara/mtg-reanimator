@@ -555,6 +555,16 @@ pub fn process_etb_triggers(
     permanent: &mut Permanent,
     _db: &CardDatabase,
 ) -> Result<(), String> {
+    process_etb_triggers_verbose(state, permanent, _db, false)
+}
+
+/// Process enter-the-battlefield triggers for a creature (with verbose output)
+pub fn process_etb_triggers_verbose(
+    state: &mut GameState,
+    permanent: &mut Permanent,
+    _db: &CardDatabase,
+    verbose: bool,
+) -> Result<(), String> {
     // Extract abilities before borrowing permanent mutably
     let abilities = match &permanent.card {
         Card::Creature(c) => c.abilities.clone(),
@@ -567,20 +577,62 @@ pub fn process_etb_triggers(
             "etb_mill_4_return_land" => {
                 // Town Greeter: mill 4, may return land
                 let milled = state.library.mill(4);
+                let mut milled_cards = Vec::new();
                 for card in milled {
-                    state.graveyard.add_card(card);
+                    milled_cards.push(card);
+                }
+
+                if verbose {
+                    let mill_names: Vec<String> = milled_cards.iter().map(|c| c.name().to_string()).collect();
+                    println!("    Mill 4: {}", mill_names.join(", "));
+                }
+
+                // Find the best land to return
+                let mut best_land: Option<Card> = None;
+                let mut best_land_idx: Option<usize> = None;
+
+                for (idx, card) in milled_cards.iter().enumerate() {
+                    if matches!(card, Card::Land(_)) {
+                        // Prefer untapped lands, then multi-color lands
+                        if let Some(ref current_best) = best_land {
+                            let new_is_better = match (card, current_best) {
+                                (Card::Land(new_land), Card::Land(current_land)) => {
+                                    let new_tapped = new_land.enters_tapped;
+                                    let current_tapped = current_land.enters_tapped;
+                                    if new_tapped != current_tapped {
+                                        !new_tapped // Prefer untapped
+                                    } else {
+                                        new_land.colors.len() > current_land.colors.len() // Prefer multi-color
+                                    }
+                                }
+                                _ => false,
+                            };
+                            if new_is_better {
+                                best_land = Some(card.clone());
+                                best_land_idx = Some(idx);
+                            }
+                        } else {
+                            best_land = Some(card.clone());
+                            best_land_idx = Some(idx);
+                        }
+                    }
+                }
+
+                // Return the best land to hand, rest to graveyard
+                for (idx, card) in milled_cards.into_iter().enumerate() {
+                    if Some(idx) == best_land_idx {
+                        if verbose {
+                            println!("    -> Returned to hand: {}", card.name());
+                        }
+                        state.hand.add_card(card);
+                    } else {
+                        state.graveyard.add_card(card);
+                    }
                 }
             }
             "etb_draw_2_discard_2" => {
-                // Kiora: draw 2, discard 2
-                for _ in 0..2 {
-                    state.draw_card();
-                }
-                // Discard 2 (simplified: just remove from hand)
-                if state.hand.size() >= 2 {
-                    state.hand.remove_card(0);
-                    state.hand.remove_card(0);
-                }
+                // Kiora: draw 2, discard 2 - use the proper priority logic
+                resolve_kiora_etb(state, verbose);
             }
             "impending_5" => {
                 // Overlord: enters with 5 time counters

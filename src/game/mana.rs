@@ -367,6 +367,119 @@ pub fn can_cast_spell(card: &Card, state: &GameState) -> bool {
     }
 }
 
+/// Tap lands to pay a mana cost. Returns true if successful.
+/// This is the key function that taps lands DURING casting, not before.
+/// Strategy: Use lands that only produce the required colors first (to preserve flexibility)
+pub fn tap_lands_for_cost(
+    cost: &ManaCost,
+    state: &mut GameState,
+    for_creature: Option<&CreatureCard>,
+) -> bool {
+    // First check if we can afford the cost
+    if !can_afford_cost(cost, state, for_creature) {
+        return false;
+    }
+
+    // Collect all land info FIRST (before any mutations)
+    // Each entry is (index, colors_this_land_produces)
+    let land_info: Vec<(usize, Vec<ManaColor>)> = state.battlefield.permanents()
+        .iter()
+        .enumerate()
+        .filter_map(|(idx, p)| {
+            if p.tapped || !matches!(p.card, Card::Land(_)) {
+                return None;
+            }
+            let colors = can_tap_for_mana(p, state, for_creature);
+            if colors.is_empty() {
+                return None;
+            }
+            Some((idx, colors))
+        })
+        .collect();
+
+    // Track which lands we'll tap (by index)
+    let mut lands_to_tap: Vec<(usize, char)> = Vec::new();
+    let mut used_indices: std::collections::HashSet<usize> = std::collections::HashSet::new();
+
+    // Pay colored costs first
+    let colors_to_pay = [
+        (ManaColor::White, cost.white),
+        (ManaColor::Blue, cost.blue),
+        (ManaColor::Black, cost.black),
+        (ManaColor::Red, cost.red),
+        (ManaColor::Green, cost.green),
+        (ManaColor::Colorless, cost.colorless),
+    ];
+
+    for (color, amount) in &colors_to_pay {
+        let mut remaining = *amount;
+
+        // Prefer lands that ONLY produce this color (preserve flexibility)
+        for (idx, colors) in &land_info {
+            if remaining == 0 {
+                break;
+            }
+            if used_indices.contains(idx) {
+                continue;
+            }
+            if colors.len() == 1 && colors[0] == *color {
+                lands_to_tap.push((*idx, color.to_char()));
+                used_indices.insert(*idx);
+                remaining -= 1;
+            }
+        }
+
+        // Then use multi-color lands
+        if remaining > 0 {
+            for (idx, colors) in &land_info {
+                if remaining == 0 {
+                    break;
+                }
+                if used_indices.contains(idx) {
+                    continue;
+                }
+                if colors.contains(color) {
+                    lands_to_tap.push((*idx, color.to_char()));
+                    used_indices.insert(*idx);
+                    remaining -= 1;
+                }
+            }
+        }
+
+        // If we still have remaining, something went wrong with can_afford_cost
+        if remaining > 0 {
+            return false;
+        }
+    }
+
+    // Pay generic with remaining untapped lands
+    let mut generic_remaining = cost.generic;
+    for (idx, colors) in &land_info {
+        if generic_remaining == 0 {
+            break;
+        }
+        if used_indices.contains(idx) {
+            continue;
+        }
+        if !colors.is_empty() {
+            lands_to_tap.push((*idx, colors[0].to_char()));
+            used_indices.insert(*idx);
+            generic_remaining -= 1;
+        }
+    }
+
+    // Now actually tap the lands and add mana to pool
+    for (idx, color_char) in lands_to_tap {
+        if let Some(perm) = state.battlefield.permanents_mut().get_mut(idx) {
+            perm.tapped = true;
+            state.mana_pool.add_mana(color_char, 1);
+        }
+    }
+
+    // Now pay the actual cost from the pool
+    state.mana_pool.pay(cost)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
