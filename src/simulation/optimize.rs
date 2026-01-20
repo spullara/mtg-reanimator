@@ -9,6 +9,7 @@ pub type LandConfig = HashMap<String, usize>;
 #[derive(Clone, Debug)]
 pub struct LandType {
     pub name: String,
+    pub min: usize,
     pub max: usize,
 }
 
@@ -31,19 +32,20 @@ pub const TOTAL_LANDS: usize = 24; // 60 - 36
 /// Get all available land types with their constraints
 pub fn get_land_types() -> Vec<LandType> {
     vec![
-        LandType { name: "Forest".to_string(), max: 4 },
-        LandType { name: "Island".to_string(), max: 4 },
-        LandType { name: "Swamp".to_string(), max: 4 },
-        LandType { name: "Watery Grave".to_string(), max: 4 },
-        LandType { name: "Undercity Sewers".to_string(), max: 4 },
-        LandType { name: "Underground Mortuary".to_string(), max: 4 },
-        LandType { name: "Cavern of Souls".to_string(), max: 4 },
-        LandType { name: "Restless Cottage".to_string(), max: 1 },
-        LandType { name: "Wastewood Verge".to_string(), max: 4 },
-        LandType { name: "Gloomlake Verge".to_string(), max: 4 },
-        LandType { name: "Multiversal Passage".to_string(), max: 4 },
-        LandType { name: "Blooming Marsh".to_string(), max: 4 },
-        LandType { name: "Starting Town".to_string(), max: 4 },
+        LandType { name: "Forest".to_string(), min: 0, max: 4 },
+        LandType { name: "Island".to_string(), min: 0, max: 4 },
+        LandType { name: "Swamp".to_string(), min: 0, max: 4 },
+        LandType { name: "Watery Grave".to_string(), min: 0, max: 4 },
+        LandType { name: "Undercity Sewers".to_string(), min: 0, max: 4 },
+        LandType { name: "Underground Mortuary".to_string(), min: 0, max: 4 },
+        // 4 Cavern of Souls for anti-counterspell protection
+        LandType { name: "Cavern of Souls".to_string(), min: 4, max: 4 },
+        LandType { name: "Restless Cottage".to_string(), min: 0, max: 1 },
+        LandType { name: "Wastewood Verge".to_string(), min: 0, max: 4 },
+        LandType { name: "Gloomlake Verge".to_string(), min: 0, max: 4 },
+        LandType { name: "Multiversal Passage".to_string(), min: 0, max: 4 },
+        LandType { name: "Blooming Marsh".to_string(), min: 0, max: 4 },
+        LandType { name: "Starting Town".to_string(), min: 0, max: 4 },
     ]
 }
 
@@ -53,18 +55,27 @@ pub fn generate_random_land_config_weighted(rng: &mut GameRng) -> LandConfig {
     let mut remaining = TOTAL_LANDS;
     let mut land_types = get_land_types();
 
-    // Shuffle land types randomly
-    rng.shuffle(&mut land_types);
-
-    // First pass: assign random counts respecting max limits
+    // First pass: enforce minimum constraints
     for land in &land_types {
-        let max_allowed = std::cmp::min(land.max, remaining);
-        let count = rng.random_range(max_allowed + 1);
-        config.insert(land.name.clone(), count);
-        remaining -= count;
+        if land.min > 0 {
+            config.insert(land.name.clone(), land.min);
+            remaining -= land.min;
+        }
     }
 
-    // Second pass: distribute remaining slots
+    // Shuffle land types randomly for variety
+    rng.shuffle(&mut land_types);
+
+    // Second pass: assign random counts respecting max limits
+    for land in &land_types {
+        let current = config.get(&land.name).copied().unwrap_or(0);
+        let max_additional = std::cmp::min(land.max - current, remaining);
+        let additional = rng.random_range(max_additional + 1);
+        *config.entry(land.name.clone()).or_insert(0) += additional;
+        remaining -= additional;
+    }
+
+    // Third pass: distribute remaining slots
     let mut attempts = 0;
     while remaining > 0 && attempts < 1000 {
         let idx = rng.random_range(land_types.len());
@@ -83,11 +94,21 @@ pub fn generate_random_land_config_weighted(rng: &mut GameRng) -> LandConfig {
 pub fn generate_random_land_config_shuffle(rng: &mut GameRng) -> LandConfig {
     let mut config = LandConfig::new();
     let land_types = get_land_types();
+    let mut remaining = TOTAL_LANDS;
 
-    // Create pool with max copies of each land
+    // First: enforce minimum constraints
+    for land in &land_types {
+        if land.min > 0 {
+            config.insert(land.name.clone(), land.min);
+            remaining -= land.min;
+        }
+    }
+
+    // Create pool with remaining capacity for each land (max - min already used)
     let mut pool: Vec<String> = Vec::new();
     for land in &land_types {
-        for _ in 0..land.max {
+        let already_used = config.get(&land.name).copied().unwrap_or(0);
+        for _ in 0..(land.max - already_used) {
             pool.push(land.name.clone());
         }
     }
@@ -95,8 +116,8 @@ pub fn generate_random_land_config_shuffle(rng: &mut GameRng) -> LandConfig {
     // Shuffle the pool
     rng.shuffle(&mut pool);
 
-    // Take first TOTAL_LANDS
-    for i in 0..TOTAL_LANDS {
+    // Take from shuffled pool to fill remaining slots
+    for i in 0..remaining.min(pool.len()) {
         let land_name = pool[i].clone();
         *config.entry(land_name).or_insert(0) += 1;
     }
