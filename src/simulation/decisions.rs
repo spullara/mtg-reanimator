@@ -1,4 +1,4 @@
-use crate::card::{Card, CardDatabase, CardType};
+use crate::card::{Card, CardDatabase, CardType, LandCard, LandSubtype};
 use crate::game::state::GameState;
 
 /// Decision engine for MTG Reanimator AI
@@ -65,31 +65,288 @@ impl DecisionEngine {
         None
     }
 
-    /// Choose which land to play
-    /// Prefer: untapped > dual lands > basic lands
-    pub fn choose_land_to_play(hand: &[Card], _state: &GameState) -> Option<usize> {
-        let mut best_idx = None;
-        let mut best_score = -1i32;
-
-        for (idx, card) in hand.iter().enumerate() {
-            if let Card::Land(land) = card {
-                // Score: untapped lands get +10, dual lands get +5
-                let mut score = 0i32;
-                if !land.enters_tapped {
-                    score += 10;
+    /// Choose which land to play - matches TypeScript's sophisticated logic
+    /// Priority 0: Lands that enable casting something this turn
+    /// Priority 1: Lands that provide missing colors (if neither enables casting)
+    /// Priority 2: Surveil lands for value (if neither enables casting)
+    /// Priority 3: Tapped lands (save untapped for later)
+    pub fn choose_land_to_play(hand: &[Card], state: &GameState) -> Option<usize> {
+        let lands: Vec<(usize, &Card)> = hand
+            .iter()
+            .enumerate()
+            .filter_map(|(idx, card)| {
+                if matches!(card, Card::Land(_)) {
+                    Some((idx, card))
+                } else {
+                    None
                 }
-                if land.colors.len() > 1 {
-                    score += 5;
-                }
+            })
+            .collect();
 
-                if score > best_score {
-                    best_score = score;
-                    best_idx = Some(idx);
+        if lands.is_empty() {
+            return None;
+        }
+
+        // Calculate available mana and colors
+        let mut mana_available = 0;
+        let mut colors_available = std::collections::HashSet::new();
+        for perm in state.battlefield.permanents() {
+            if let Card::Land(land) = &perm.card {
+                if !perm.tapped {
+                    mana_available += 1;
+                    for color in &land.colors {
+                        colors_available.insert(*color);
+                    }
                 }
             }
         }
 
-        best_idx
+        // Calculate mana after playing a land (one more untapped land)
+        let mana_after_land_drop = mana_available + 1;
+
+        // Get spells in hand
+        let spells_in_hand: Vec<&Card> = hand
+            .iter()
+            .filter(|c| !matches!(c, Card::Land(_)))
+            .collect();
+
+        // Calculate missing colors
+        let mut missing_colors = std::collections::HashSet::new();
+        for spell in &spells_in_hand {
+            match spell {
+                Card::Creature(c) => {
+                    if c.base.mana_cost.white > 0 && !colors_available.contains(&crate::card::ManaColor::White) {
+                        missing_colors.insert(crate::card::ManaColor::White);
+                    }
+                    if c.base.mana_cost.blue > 0 && !colors_available.contains(&crate::card::ManaColor::Blue) {
+                        missing_colors.insert(crate::card::ManaColor::Blue);
+                    }
+                    if c.base.mana_cost.black > 0 && !colors_available.contains(&crate::card::ManaColor::Black) {
+                        missing_colors.insert(crate::card::ManaColor::Black);
+                    }
+                    if c.base.mana_cost.red > 0 && !colors_available.contains(&crate::card::ManaColor::Red) {
+                        missing_colors.insert(crate::card::ManaColor::Red);
+                    }
+                    if c.base.mana_cost.green > 0 && !colors_available.contains(&crate::card::ManaColor::Green) {
+                        missing_colors.insert(crate::card::ManaColor::Green);
+                    }
+                }
+                Card::Enchantment(e) => {
+                    if e.base.mana_cost.white > 0 && !colors_available.contains(&crate::card::ManaColor::White) {
+                        missing_colors.insert(crate::card::ManaColor::White);
+                    }
+                    if e.base.mana_cost.blue > 0 && !colors_available.contains(&crate::card::ManaColor::Blue) {
+                        missing_colors.insert(crate::card::ManaColor::Blue);
+                    }
+                    if e.base.mana_cost.black > 0 && !colors_available.contains(&crate::card::ManaColor::Black) {
+                        missing_colors.insert(crate::card::ManaColor::Black);
+                    }
+                    if e.base.mana_cost.red > 0 && !colors_available.contains(&crate::card::ManaColor::Red) {
+                        missing_colors.insert(crate::card::ManaColor::Red);
+                    }
+                    if e.base.mana_cost.green > 0 && !colors_available.contains(&crate::card::ManaColor::Green) {
+                        missing_colors.insert(crate::card::ManaColor::Green);
+                    }
+                }
+                Card::Sorcery(s) => {
+                    if s.base.mana_cost.white > 0 && !colors_available.contains(&crate::card::ManaColor::White) {
+                        missing_colors.insert(crate::card::ManaColor::White);
+                    }
+                    if s.base.mana_cost.blue > 0 && !colors_available.contains(&crate::card::ManaColor::Blue) {
+                        missing_colors.insert(crate::card::ManaColor::Blue);
+                    }
+                    if s.base.mana_cost.black > 0 && !colors_available.contains(&crate::card::ManaColor::Black) {
+                        missing_colors.insert(crate::card::ManaColor::Black);
+                    }
+                    if s.base.mana_cost.red > 0 && !colors_available.contains(&crate::card::ManaColor::Red) {
+                        missing_colors.insert(crate::card::ManaColor::Red);
+                    }
+                    if s.base.mana_cost.green > 0 && !colors_available.contains(&crate::card::ManaColor::Green) {
+                        missing_colors.insert(crate::card::ManaColor::Green);
+                    }
+                }
+                _ => {}
+            }
+        }
+
+        // Helper: check if land enters tapped
+        let enters_tapped = |land: &LandCard| -> bool {
+            match land.subtype {
+                LandSubtype::Fastland => {
+                    let land_count = state
+                        .battlefield
+                        .permanents()
+                        .iter()
+                        .filter(|p| matches!(p.card, Card::Land(_)))
+                        .count();
+                    land_count >= 3
+                }
+                LandSubtype::Town => state.turn > 3,
+                _ => land.enters_tapped,
+            }
+        };
+
+        // Helper: check if land provides missing color
+        let provides_missing_color = |land: &LandCard| -> bool {
+            land.colors.iter().any(|c| missing_colors.contains(c))
+        };
+
+        // Helper: check if we can cast something this turn with this land
+        let can_cast_something_this_turn = |land: &LandCard| -> bool {
+            // If land enters tapped, we can't use it this turn
+            if enters_tapped(land) {
+                return false;
+            }
+
+            // What colors would we have after playing this land?
+            let mut colors_after = colors_available.clone();
+            for color in &land.colors {
+                colors_after.insert(*color);
+            }
+
+            // Can we cast any spell?
+            spells_in_hand.iter().any(|spell| {
+                let mv = spell.mana_value();
+                if mv > mana_after_land_drop {
+                    return false;
+                }
+
+                // Check color requirements
+                match spell {
+                    Card::Creature(c) => {
+                        if c.base.mana_cost.white > 0 && !colors_after.contains(&crate::card::ManaColor::White) {
+                            return false;
+                        }
+                        if c.base.mana_cost.blue > 0 && !colors_after.contains(&crate::card::ManaColor::Blue) {
+                            return false;
+                        }
+                        if c.base.mana_cost.black > 0 && !colors_after.contains(&crate::card::ManaColor::Black) {
+                            return false;
+                        }
+                        if c.base.mana_cost.red > 0 && !colors_after.contains(&crate::card::ManaColor::Red) {
+                            return false;
+                        }
+                        if c.base.mana_cost.green > 0 && !colors_after.contains(&crate::card::ManaColor::Green) {
+                            return false;
+                        }
+                        true
+                    }
+                    Card::Enchantment(e) => {
+                        if e.base.mana_cost.white > 0 && !colors_after.contains(&crate::card::ManaColor::White) {
+                            return false;
+                        }
+                        if e.base.mana_cost.blue > 0 && !colors_after.contains(&crate::card::ManaColor::Blue) {
+                            return false;
+                        }
+                        if e.base.mana_cost.black > 0 && !colors_after.contains(&crate::card::ManaColor::Black) {
+                            return false;
+                        }
+                        if e.base.mana_cost.red > 0 && !colors_after.contains(&crate::card::ManaColor::Red) {
+                            return false;
+                        }
+                        if e.base.mana_cost.green > 0 && !colors_after.contains(&crate::card::ManaColor::Green) {
+                            return false;
+                        }
+                        true
+                    }
+                    Card::Sorcery(s) => {
+                        if s.base.mana_cost.white > 0 && !colors_after.contains(&crate::card::ManaColor::White) {
+                            return false;
+                        }
+                        if s.base.mana_cost.blue > 0 && !colors_after.contains(&crate::card::ManaColor::Blue) {
+                            return false;
+                        }
+                        if s.base.mana_cost.black > 0 && !colors_after.contains(&crate::card::ManaColor::Black) {
+                            return false;
+                        }
+                        if s.base.mana_cost.red > 0 && !colors_after.contains(&crate::card::ManaColor::Red) {
+                            return false;
+                        }
+                        if s.base.mana_cost.green > 0 && !colors_after.contains(&crate::card::ManaColor::Green) {
+                            return false;
+                        }
+                        true
+                    }
+                    _ => true,
+                }
+            })
+        };
+
+        // Sort lands by priority
+        let mut sorted_lands = lands.clone();
+        sorted_lands.sort_by(|a, b| {
+            let a_land = match a.1 {
+                Card::Land(l) => l,
+                _ => return std::cmp::Ordering::Equal,
+            };
+            let b_land = match b.1 {
+                Card::Land(l) => l,
+                _ => return std::cmp::Ordering::Equal,
+            };
+
+            let a_tapped = enters_tapped(a_land);
+            let b_tapped = enters_tapped(b_land);
+
+            let a_provides_missing = provides_missing_color(a_land);
+            let b_provides_missing = provides_missing_color(b_land);
+
+            let a_enables_cast = can_cast_something_this_turn(a_land);
+            let b_enables_cast = can_cast_something_this_turn(b_land);
+
+            // PRIORITY 0: Lands that enable casting something this turn
+            if a_enables_cast != b_enables_cast {
+                return if a_enables_cast {
+                    std::cmp::Ordering::Less
+                } else {
+                    std::cmp::Ordering::Greater
+                };
+            }
+
+            // PRIORITY 1: If neither enables casting, prefer lands that provide missing colors
+            if !a_enables_cast && !b_enables_cast {
+                if a_provides_missing != b_provides_missing {
+                    return if a_provides_missing {
+                        std::cmp::Ordering::Less
+                    } else {
+                        std::cmp::Ordering::Greater
+                    };
+                }
+
+                // Prefer surveil tapped lands (get value!)
+                if a_land.has_surveil != b_land.has_surveil {
+                    return if a_land.has_surveil {
+                        std::cmp::Ordering::Less
+                    } else {
+                        std::cmp::Ordering::Greater
+                    };
+                }
+
+                // Prefer tapped (save untapped for later)
+                if a_tapped != b_tapped {
+                    return if a_tapped {
+                        std::cmp::Ordering::Less
+                    } else {
+                        std::cmp::Ordering::Greater
+                    };
+                }
+
+                return std::cmp::Ordering::Equal;
+            }
+
+            // PRIORITY 2: Both enable casting - prefer surveil for value
+            if a_land.has_surveil != b_land.has_surveil {
+                return if a_land.has_surveil {
+                    std::cmp::Ordering::Less
+                } else {
+                    std::cmp::Ordering::Greater
+                };
+            }
+
+            // Prefer more colors
+            b_land.colors.len().cmp(&a_land.colors.len())
+        });
+
+        sorted_lands.first().map(|(idx, _)| *idx)
     }
 
     /// Choose creatures to attack with (all eligible creatures attack)
