@@ -79,17 +79,20 @@ impl fmt::Display for FailureReason {
 }
 
 /// Analyze the game state at turn 4 to determine why combo couldn't fire
+/// This should be called at the START of turn 4's main phase (after draw)
 pub fn analyze_turn4_state(state: &GameState) -> Turn4Analysis {
+    use crate::card::LandSubtype;
+
     // Count lands on battlefield
-    let lands_count = state.battlefield.permanents().iter()
+    let lands_on_battlefield = state.battlefield.permanents().iter()
         .filter(|p| matches!(p.card, Card::Land(_)))
         .count() as u32;
-    
-    // Check available colors using the proper mana system
+
+    // Check available colors from lands currently on battlefield
     let mut has_blue = false;
     let mut has_black = false;
     let mut has_green = false;
-    
+
     for permanent in state.battlefield.permanents() {
         if matches!(permanent.card, Card::Land(_)) {
             let colors = mana::can_tap_for_mana(permanent, state, None);
@@ -98,7 +101,56 @@ pub fn analyze_turn4_state(state: &GameState) -> Turn4Analysis {
             if colors.has_green() { has_green = true; }
         }
     }
-    
+
+    // Check if we have a land in hand that enters untapped on turn 4
+    // This affects both land count and color availability
+    let mut land_in_hand_untapped = false;
+    let mut land_in_hand_colors = (false, false, false); // (U, B, G)
+
+    for card in state.hand.cards() {
+        if let Card::Land(land) = card {
+            // Check if this land would enter untapped on turn 4
+            let enters_tapped = match land.subtype {
+                LandSubtype::Fastland => {
+                    // Fastland enters tapped if we control 3+ other lands
+                    lands_on_battlefield >= 3
+                }
+                LandSubtype::Town => {
+                    // Starting Town enters tapped on turn 4+
+                    state.turn > 3  // turn 4 = tapped
+                }
+                LandSubtype::Shock => {
+                    // Shock lands can pay 2 life to enter untapped
+                    state.life <= 2
+                }
+                _ => land.enters_tapped,
+            };
+
+            if !enters_tapped {
+                land_in_hand_untapped = true;
+                // Check what colors this land provides
+                for color in &land.colors {
+                    match color {
+                        crate::card::ManaColor::Blue => land_in_hand_colors.0 = true,
+                        crate::card::ManaColor::Black => land_in_hand_colors.1 = true,
+                        crate::card::ManaColor::Green => land_in_hand_colors.2 = true,
+                        _ => {}
+                    }
+                }
+            }
+        }
+    }
+
+    // Total available mana = lands on battlefield + (1 if untapped land in hand)
+    let total_mana = lands_on_battlefield + if land_in_hand_untapped { 1 } else { 0 };
+
+    // Colors available = battlefield colors + hand land colors (if untapped)
+    if land_in_hand_untapped {
+        has_blue = has_blue || land_in_hand_colors.0;
+        has_black = has_black || land_in_hand_colors.1;
+        has_green = has_green || land_in_hand_colors.2;
+    }
+
     // Find card locations
     let mut locations = CardLocations::default();
     
@@ -141,13 +193,13 @@ pub fn analyze_turn4_state(state: &GameState) -> Turn4Analysis {
     
     // Determine primary failure reason (in priority order)
     let primary_failure = determine_primary_failure(
-        lands_count, has_blue, has_black, has_green,
+        total_mana, has_blue, has_black, has_green,
         &locations, combo_damage, state.opponent_life,
     );
-    
+
     Turn4Analysis {
         primary_failure,
-        lands_count,
+        lands_count: total_mana,  // Total mana available (battlefield + playable land)
         colors_available: (has_blue, has_black, has_green),
         card_locations: locations,
         combo_damage,
@@ -210,6 +262,7 @@ fn determine_primary_failure(
 }
 
 /// Run a game to turn 4 only (for analysis)
+/// Analyzes state at the START of turn 4 (after draw, before main phase)
 pub fn run_game_to_turn4(
     deck: &[Card],
     seed: u64,
@@ -218,6 +271,7 @@ pub fn run_game_to_turn4(
     use crate::simulation::mulligan::resolve_mulligans;
     use crate::rng::GameRng;
     use crate::simulation::engine::execute_turn;
+    use crate::game::turns::{start_turn, draw_phase, upkeep_phase};
 
     let mut rng = GameRng::new(Some(seed));
     let mut state = GameState::new();
@@ -252,12 +306,19 @@ pub fn run_game_to_turn4(
         state.hand.add_card(card);
     }
 
-    // Run turns 1-4
-    for _ in 0..4 {
+    // Run turns 1-3 fully
+    for _ in 0..3 {
         execute_turn(&mut state, db, false, &mut rng);
     }
 
-    // Analyze state at end of turn 4
+    // Turn 4: only do start_turn (untap), upkeep, and draw - then analyze
+    // This gives us the state at the START of turn 4's main phase
+    start_turn(&mut state);
+    upkeep_phase(&mut state);
+    draw_phase(&mut state);
+
+    // Analyze state at START of turn 4 main phase
+    // All lands are untapped (from start_turn), we've drawn for the turn
     analyze_turn4_state(&state)
 }
 
