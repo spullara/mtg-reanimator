@@ -392,6 +392,91 @@ pub fn resolve_surveil(state: &mut GameState, count: usize, verbose: bool) {
     }
 }
 
+/// Resolve Kiora's ETB ability: draw 2, discard 2
+///
+/// EXACT LOGIC FROM TYPESCRIPT:
+/// - Draw 2 cards first
+/// - Then discard 2 cards with 4-priority system:
+///   1. Bringer of the Last Gift
+///   2. Terror of the Peaks
+///   3. Excess lands (only if > 2 lands in hand)
+///   4. Last card in hand
+/// - Each discard iteration searches for the best card independently
+pub fn resolve_kiora_etb(state: &mut GameState, verbose: bool) {
+    // Draw 2, discard 2
+    let hand_before = state.hand.size();
+    state.draw_card();
+    state.draw_card();
+
+    // Collect drawn cards for logging
+    let drawn: Vec<String> = state.hand.cards()
+        .iter()
+        .skip(hand_before)
+        .map(|c| c.name().to_string())
+        .collect();
+
+    if verbose {
+        println!("    Kiora ETB: drew {}", drawn.join(", "));
+    }
+
+    // Discard 2 - prioritize discarding Bringer/Terror
+    let mut discarded: Vec<String> = Vec::new();
+    for _ in 0..2 {
+        if state.hand.size() == 0 {
+            break;
+        }
+
+        // Find best card to discard
+        let mut to_discard_idx: Option<usize> = None;
+
+        // Priority 1: Bringer of the Last Gift
+        if to_discard_idx.is_none() {
+            to_discard_idx = state.hand.cards()
+                .iter()
+                .position(|c| c.name() == "Bringer of the Last Gift");
+        }
+
+        // Priority 2: Terror of the Peaks
+        if to_discard_idx.is_none() {
+            to_discard_idx = state.hand.cards()
+                .iter()
+                .position(|c| c.name() == "Terror of the Peaks");
+        }
+
+        // Priority 3: Excess lands (only if > 2 lands in hand)
+        if to_discard_idx.is_none() {
+            let lands: Vec<usize> = state.hand.cards()
+                .iter()
+                .enumerate()
+                .filter(|(_, c)| matches!(c, Card::Land(_)))
+                .map(|(i, _)| i)
+                .collect();
+            if lands.len() > 2 {
+                // Take the last land
+                to_discard_idx = lands.last().copied();
+            }
+        }
+
+        // Priority 4: Last card in hand
+        if to_discard_idx.is_none() {
+            to_discard_idx = Some(state.hand.size() - 1);
+        }
+
+        // Discard the card
+        if let Some(idx) = to_discard_idx {
+            if let Some(card) = state.hand.remove_card(idx) {
+                let card_name = card.name().to_string();
+                state.graveyard.add_card(card);
+                discarded.push(card_name);
+            }
+        }
+    }
+
+    if verbose {
+        println!("    Kiora ETB: discarded {}", discarded.join(", "));
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -786,6 +871,273 @@ mod tests {
         // Land should still be on top of library
         assert_eq!(state.library.size(), 2);
         assert_eq!(state.library.peek_top().unwrap().name(), "Forest");
+    }
+
+    #[test]
+    fn test_resolve_kiora_etb_draws_2_cards() {
+        let mut state = GameState::new();
+
+        // Add 4 cards to library (2 to draw, 2 to keep in hand after discard)
+        for i in 0..4 {
+            let land = Card::Land(LandCard {
+                base: BaseCard {
+                    name: format!("Forest {}", i),
+                    mana_cost: ManaCost::default(),
+                    mana_value: 0,
+                },
+                subtype: LandSubtype::Basic,
+                enters_tapped: false,
+                colors: vec![ManaColor::Green],
+                has_surveil: false,
+                surveil_amount: 0,
+            });
+            state.library.add_card(land);
+        }
+
+        // Add 2 cards to hand to keep after discard
+        for i in 0..2 {
+            let creature = Card::Creature(CreatureCard {
+                base: BaseCard {
+                    name: format!("Creature {}", i),
+                    mana_cost: ManaCost::default(),
+                    mana_value: 1,
+                },
+                power: 1,
+                toughness: 1,
+                is_legendary: false,
+                creature_types: vec![],
+                abilities: vec![],
+                impending_cost: None,
+                impending_counters: None,
+            });
+            state.hand.add_card(creature);
+        }
+
+        let hand_before = state.hand.size();
+        resolve_kiora_etb(&mut state, false);
+
+        // Should have drawn 2 cards and discarded 2 cards (net: +0)
+        // But we had 2 creatures in hand, so: 2 + 2 (drawn) - 2 (discarded) = 2
+        assert_eq!(state.hand.size(), hand_before);
+        assert_eq!(state.library.size(), 2); // 4 - 2 drawn
+        assert_eq!(state.graveyard.size(), 2); // 2 discarded
+    }
+
+    #[test]
+    fn test_resolve_kiora_etb_discards_bringer_first() {
+        let mut state = GameState::new();
+
+        // Add 2 cards to library to draw
+        for i in 0..2 {
+            let land = Card::Land(LandCard {
+                base: BaseCard {
+                    name: format!("Forest {}", i),
+                    mana_cost: ManaCost::default(),
+                    mana_value: 0,
+                },
+                subtype: LandSubtype::Basic,
+                enters_tapped: false,
+                colors: vec![ManaColor::Green],
+                has_surveil: false,
+                surveil_amount: 0,
+            });
+            state.library.add_card(land);
+        }
+
+        // Add Bringer to hand
+        let bringer = Card::Creature(CreatureCard {
+            base: BaseCard {
+                name: "Bringer of the Last Gift".to_string(),
+                mana_cost: ManaCost::default(),
+                mana_value: 8,
+            },
+            power: 6,
+            toughness: 6,
+            is_legendary: false,
+            creature_types: vec![],
+            abilities: vec![],
+            impending_cost: None,
+            impending_counters: None,
+        });
+        state.hand.add_card(bringer);
+
+        resolve_kiora_etb(&mut state, false);
+
+        // Should have discarded 2 cards (Bringer + 1 other)
+        assert_eq!(state.graveyard.size(), 2);
+        // Bringer should be in graveyard
+        assert!(state.graveyard.cards().iter().any(|c| c.name() == "Bringer of the Last Gift"));
+    }
+
+    #[test]
+    fn test_resolve_kiora_etb_discards_terror_second() {
+        let mut state = GameState::new();
+
+        // Add 2 cards to library to draw
+        for i in 0..2 {
+            let land = Card::Land(LandCard {
+                base: BaseCard {
+                    name: format!("Forest {}", i),
+                    mana_cost: ManaCost::default(),
+                    mana_value: 0,
+                },
+                subtype: LandSubtype::Basic,
+                enters_tapped: false,
+                colors: vec![ManaColor::Green],
+                has_surveil: false,
+                surveil_amount: 0,
+            });
+            state.library.add_card(land);
+        }
+
+        // Add Terror to hand (no Bringer)
+        let terror = Card::Creature(CreatureCard {
+            base: BaseCard {
+                name: "Terror of the Peaks".to_string(),
+                mana_cost: ManaCost::default(),
+                mana_value: 5,
+            },
+            power: 5,
+            toughness: 5,
+            is_legendary: false,
+            creature_types: vec![],
+            abilities: vec![],
+            impending_cost: None,
+            impending_counters: None,
+        });
+        state.hand.add_card(terror);
+
+        resolve_kiora_etb(&mut state, false);
+
+        // Should have discarded 2 cards (Terror + 1 other)
+        assert_eq!(state.graveyard.size(), 2);
+        // Terror should be in graveyard
+        assert!(state.graveyard.cards().iter().any(|c| c.name() == "Terror of the Peaks"));
+    }
+
+    #[test]
+    fn test_resolve_kiora_etb_discards_excess_lands() {
+        let mut state = GameState::new();
+
+        // Add 2 cards to library to draw
+        for i in 0..2 {
+            let land = Card::Land(LandCard {
+                base: BaseCard {
+                    name: format!("Forest {}", i),
+                    mana_cost: ManaCost::default(),
+                    mana_value: 0,
+                },
+                subtype: LandSubtype::Basic,
+                enters_tapped: false,
+                colors: vec![ManaColor::Green],
+                has_surveil: false,
+                surveil_amount: 0,
+            });
+            state.library.add_card(land);
+        }
+
+        // Add 3 lands to hand (excess)
+        for i in 0..3 {
+            let land = Card::Land(LandCard {
+                base: BaseCard {
+                    name: format!("Island {}", i),
+                    mana_cost: ManaCost::default(),
+                    mana_value: 0,
+                },
+                subtype: LandSubtype::Basic,
+                enters_tapped: false,
+                colors: vec![ManaColor::Blue],
+                has_surveil: false,
+                surveil_amount: 0,
+            });
+            state.hand.add_card(land);
+        }
+
+        resolve_kiora_etb(&mut state, false);
+
+        // Should have discarded 2 cards (2 lands)
+        assert_eq!(state.graveyard.size(), 2);
+        // Should have 3 lands in hand still (drew 2, discarded 2)
+        let lands_in_hand = state.hand.cards().iter().filter(|c| matches!(c, Card::Land(_))).count();
+        assert_eq!(lands_in_hand, 3);
+    }
+
+    #[test]
+    fn test_resolve_kiora_etb_discards_last_card_when_no_priority() {
+        let mut state = GameState::new();
+
+        // Add 2 cards to library to draw
+        for i in 0..2 {
+            let land = Card::Land(LandCard {
+                base: BaseCard {
+                    name: format!("Forest {}", i),
+                    mana_cost: ManaCost::default(),
+                    mana_value: 0,
+                },
+                subtype: LandSubtype::Basic,
+                enters_tapped: false,
+                colors: vec![ManaColor::Green],
+                has_surveil: false,
+                surveil_amount: 0,
+            });
+            state.library.add_card(land);
+        }
+
+        // Add 1 creature to hand (not Bringer or Terror)
+        let creature = Card::Creature(CreatureCard {
+            base: BaseCard {
+                name: "Town Greeter".to_string(),
+                mana_cost: ManaCost::default(),
+                mana_value: 1,
+            },
+            power: 1,
+            toughness: 1,
+            is_legendary: false,
+            creature_types: vec![],
+            abilities: vec![],
+            impending_cost: None,
+            impending_counters: None,
+        });
+        state.hand.add_card(creature);
+
+        resolve_kiora_etb(&mut state, false);
+
+        // Should have discarded 2 cards
+        assert_eq!(state.graveyard.size(), 2);
+        // Hand should have 1 card (1 creature + 2 drawn - 2 discarded)
+        assert_eq!(state.hand.size(), 1);
+    }
+
+    #[test]
+    fn test_resolve_kiora_etb_with_empty_library() {
+        let mut state = GameState::new();
+
+        // Add 2 cards to hand
+        for i in 0..2 {
+            let creature = Card::Creature(CreatureCard {
+                base: BaseCard {
+                    name: format!("Creature {}", i),
+                    mana_cost: ManaCost::default(),
+                    mana_value: 1,
+                },
+                power: 1,
+                toughness: 1,
+                is_legendary: false,
+                creature_types: vec![],
+                abilities: vec![],
+                impending_cost: None,
+                impending_counters: None,
+            });
+            state.hand.add_card(creature);
+        }
+
+        // Library is empty
+        resolve_kiora_etb(&mut state, false);
+
+        // Should have tried to draw but couldn't (library empty)
+        // Should have discarded 2 cards (the creatures)
+        assert_eq!(state.hand.size(), 0); // 2 - 2 discarded
+        assert_eq!(state.graveyard.size(), 2); // 2 discarded
     }
 }
 
