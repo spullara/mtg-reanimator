@@ -665,16 +665,155 @@ pub fn process_etb_triggers_verbose(
             }
             "mind_swap_copy" => {
                 // Superior Spider-Man: copy creature from graveyard
-                // Find a creature in graveyard and copy it
-                if let Some(creature) = state.graveyard.find_creature() {
-                    permanent.is_copy_of = Some(creature.name().to_string());
+                // EXACT LOGIC FROM TYPESCRIPT resolveSpiderManETB:
+                // Priority: Copy Bringer if in graveyard (THE COMBO!)
+
+                let bringer_idx = state.graveyard.cards().iter()
+                    .position(|c| c.name() == "Bringer of the Last Gift");
+
+                if let Some(idx) = bringer_idx {
+                    if verbose {
+                        println!("    *** COMBO! Superior Spider-Man copies Bringer of the Last Gift! ***");
+                    }
+
+                    // Copy Bringer!
+                    permanent.is_copy_of = Some("Bringer of the Last Gift".to_string());
+
+                    // Exile the copied card
+                    if let Some(bringer) = state.graveyard.remove_card(idx) {
+                        state.exile.add_card(bringer);
+                    }
+
+                    // Now trigger Bringer's ETB (mass reanimate!)
+                    resolve_bringer_etb(state, verbose);
+                } else if verbose {
+                    println!("    Spider-Man enters as a 4/4 (no good copy target)");
                 }
+                // If no good target, Spider-Man just enters as a 4/4
             }
             _ => {} // Other abilities handled elsewhere
         }
     }
 
     Ok(())
+}
+
+/// Resolve Bringer of the Last Gift ETB: sacrifice all other creatures, then mass reanimate
+///
+/// EXACT LOGIC FROM TYPESCRIPT resolveBringerETB:
+/// 1. Sacrifice all other creatures (except impending ones with time counters)
+/// 2. Return ALL creature cards from graveyard to battlefield
+/// 3. Trigger Terror of the Peaks for each creature entering
+pub fn resolve_bringer_etb(state: &mut GameState, verbose: bool) {
+    // Step 1: Sacrifice all other creatures (move to graveyard)
+    // NOTE: Impending creatures (with time counters) are NOT creatures yet - they're enchantments!
+    // NOTE: We need to find the Spider-Man that just entered (the one copying Bringer)
+    // and exclude it from sacrifice. It's the last permanent added to the battlefield.
+    let bringer_copy_idx = state.battlefield.permanents().len().saturating_sub(1);
+
+    let mut to_sacrifice: Vec<usize> = Vec::new();
+
+    for (idx, perm) in state.battlefield.permanents().iter().enumerate() {
+        // Skip the Spider-Man that just entered (copying Bringer)
+        if idx == bringer_copy_idx {
+            continue;
+        }
+        // Skip non-creatures
+        if !matches!(perm.card, Card::Creature(_)) {
+            continue;
+        }
+        // Skip impending creatures (have time counters)
+        if perm.get_counter(CounterType::Time) > 0 {
+            if verbose {
+                println!("    Impending survives: {} ({} counters)",
+                    perm.card.name(), perm.get_counter(CounterType::Time));
+            }
+            continue;
+        }
+        to_sacrifice.push(idx);
+    }
+
+    if verbose && !to_sacrifice.is_empty() {
+        let names: Vec<String> = to_sacrifice.iter()
+            .map(|&idx| state.battlefield.permanents()[idx].card.name().to_string())
+            .collect();
+        println!("    Sacrifice: {}", names.join(", "));
+    }
+
+    // Remove sacrificed creatures and add to graveyard (in reverse order to preserve indices)
+    for &idx in to_sacrifice.iter().rev() {
+        if let Some(perm) = state.battlefield.remove_permanent(idx) {
+            state.graveyard.add_card(perm.card);
+        }
+    }
+
+    // Step 2: Return ALL creature cards from graveyard to battlefield
+    let creatures_to_reanimate: Vec<Card> = state.graveyard.cards()
+        .iter()
+        .filter(|c| matches!(c, Card::Creature(_)))
+        .cloned()
+        .collect();
+
+    if verbose && !creatures_to_reanimate.is_empty() {
+        let names: Vec<String> = creatures_to_reanimate.iter()
+            .map(|c| c.name().to_string())
+            .collect();
+        println!("    Reanimate: {}", names.join(", "));
+    }
+
+    // Remove creatures from graveyard
+    state.graveyard.clear_creatures();
+
+    // Add to battlefield
+    for creature in &creatures_to_reanimate {
+        let perm = Permanent::new(creature.clone(), state.turn);
+        state.battlefield.add_permanent(perm);
+    }
+
+    // Step 3: Resolve Terror triggers for each creature that entered
+    resolve_terror_triggers(state, &creatures_to_reanimate, verbose);
+}
+
+/// Resolve Terror of the Peaks triggers for creatures entering the battlefield
+///
+/// EXACT LOGIC FROM TYPESCRIPT resolveTerrorTriggers:
+/// - Count Terrors on battlefield
+/// - Each Terror triggers for each OTHER creature entering (not itself)
+/// - Deal damage equal to creature's power for each Terror
+fn resolve_terror_triggers(state: &mut GameState, entering: &[Card], verbose: bool) {
+    // Count how many Terrors are on the battlefield
+    let terror_count = state.battlefield.permanents().iter()
+        .filter(|p| {
+            p.card.name() == "Terror of the Peaks"
+                || p.is_copy_of.as_deref() == Some("Terror of the Peaks")
+        })
+        .count() as i32;
+
+    if terror_count == 0 {
+        return;
+    }
+
+    // Each Terror triggers for each OTHER creature entering
+    // (Terror doesn't trigger for itself)
+    let mut total_damage = 0i32;
+
+    for creature in entering {
+        if creature.name() == "Terror of the Peaks" {
+            continue; // Doesn't trigger for itself
+        }
+
+        if let Card::Creature(c) = creature {
+            // Each Terror deals damage equal to the creature's power
+            total_damage += c.power as i32 * terror_count;
+        }
+    }
+
+    state.opponent_life -= total_damage;
+
+    if verbose && total_damage > 0 {
+        println!("  Terror triggers dealt {} damage! ({} Terror(s), {} creatures entered)",
+            total_damage, terror_count, entering.len());
+    }
 }
 
 /// Resolve surveil mechanic: look at top N cards and decide which go to graveyard

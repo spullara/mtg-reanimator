@@ -1,4 +1,4 @@
-use crate::card::{Card, CardDatabase};
+use crate::card::{Card, CardDatabase, LandCard, LandSubtype, ManaColor};
 use crate::game::state::GameState;
 use crate::game::turns::{start_turn, draw_phase, upkeep_phase, end_phase};
 use crate::game::cards;
@@ -235,9 +235,94 @@ pub fn main_phase(state: &mut GameState, db: &CardDatabase, verbose: bool) {
         c.name() == "Bringer of the Last Gift" || c.name() == "Terror of the Peaks"
     });
     let kiora_in_hand = state.hand.cards().iter().find(|c| c.name() == "Kiora, the Rising Tide");
+
+    // Check if we can cast Kiora now OR if we could cast it after playing an untapped land
+    let could_cast_kiora_after_land_drop = || -> bool {
+        let kiora = match kiora_in_hand {
+            Some(k) => k,
+            None => return false,
+        };
+
+        // Can cast now?
+        if mana::can_cast_spell(kiora, state) {
+            return true;
+        }
+
+        // If we've already played a land, no look-ahead needed
+        if state.land_played_this_turn {
+            return false;
+        }
+
+        // Check if playing an untapped land would enable Kiora
+        let current_mana = state.battlefield.permanents().iter()
+            .filter(|p| matches!(p.card, Card::Land(_)) && !p.tapped)
+            .count() as u32;
+        let kiora_cost = kiora.mana_value();
+
+        // Would one more mana be enough?
+        if current_mana + 1 < kiora_cost {
+            return false;
+        }
+
+        // Helper: check if land enters tapped
+        let land_enters_tapped = |land: &LandCard| -> bool {
+            match land.subtype {
+                LandSubtype::Fastland => {
+                    let land_count = state.battlefield.permanents().iter()
+                        .filter(|p| matches!(p.card, Card::Land(_)))
+                        .count();
+                    land_count >= 3
+                }
+                LandSubtype::Town => state.turn > 3,
+                LandSubtype::Shock => state.life <= 2, // Enters tapped if we can't pay 2 life
+                _ => land.enters_tapped,
+            }
+        };
+
+        // Check if we have an untapped land that produces U (Kiora needs U)
+        let has_untapped_land_with_u = state.hand.cards().iter().any(|c| {
+            if let Card::Land(land) = c {
+                if land_enters_tapped(land) {
+                    return false;
+                }
+                // Check if land produces U
+                land.colors.contains(&ManaColor::Blue)
+            } else {
+                false
+            }
+        });
+
+        // Also check if we already have U available and just need an untapped land for mana count
+        let has_u_available = state.battlefield.permanents().iter().any(|p| {
+            if p.tapped {
+                return false;
+            }
+            if let Card::Land(land) = &p.card {
+                land.colors.contains(&ManaColor::Blue)
+            } else {
+                false
+            }
+        });
+
+        if has_u_available {
+            // We have U, just need any untapped land for the mana count
+            let has_any_untapped_land = state.hand.cards().iter().any(|c| {
+                if let Card::Land(land) = c {
+                    !land_enters_tapped(land)
+                } else {
+                    false
+                }
+            });
+            return has_any_untapped_land;
+        }
+
+        // We need the new land to provide U
+        has_untapped_land_with_u
+    };
+
     let should_prioritize_kiora = has_bringer_or_terror_in_hand
         && kiora_in_hand.is_some()
-        && mana::can_cast_spell(kiora_in_hand.unwrap(), state);
+        && could_cast_kiora_after_land_drop();
 
     if !state.land_played_this_turn && !should_prioritize_kiora {
         let mut cast_any = true;

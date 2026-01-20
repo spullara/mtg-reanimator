@@ -329,248 +329,172 @@ interface GameState {
 }
 
 // ============================================================================
-// PHASE 1: CARD DATABASE
+// PHASE 1: CARD DATABASE (loaded from cards.json)
 // ============================================================================
 
-const CARD_DATABASE: Record<string, Card> = {
-  // --- Basic Lands ---
-  Forest: {
-    name: "Forest",
-    type: "land",
-    subtype: "basic",
-    manaValue: 0,
-    entersTapped: false,
-    colors: ["G"],
-  },
-  Island: {
-    name: "Island",
-    type: "land",
-    subtype: "basic",
-    manaValue: 0,
-    entersTapped: false,
-    colors: ["U"],
-  },
-  Swamp: {
-    name: "Swamp",
-    type: "land",
-    subtype: "basic",
-    manaValue: 0,
-    entersTapped: false,
-    colors: ["B"],
-  },
+import { readFileSync } from "fs";
+import { dirname, join } from "path";
+import { fileURLToPath } from "url";
 
-  // --- Shock Lands ---
-  "Watery Grave": {
-    name: "Watery Grave",
-    type: "land",
-    subtype: "shock",
-    manaValue: 0,
-    entersTapped: "conditional", // Pay 2 life or tapped
-    colors: ["U", "B"],
-  },
+// JSON card format (snake_case from cards.json)
+interface JsonCard {
+  name: string;
+  card_type: string;
+  mana_value: number;
+  subtype?: string;
+  enters_tapped?: boolean;
+  colors?: string[];
+  has_surveil?: boolean;
+  surveil_amount?: number;
+  mana_cost?: Record<string, number>;
+  power?: number;
+  toughness?: number;
+  creature_types?: string[];
+  abilities?: string[];
+  is_legendary?: boolean;
+  impending_cost?: Record<string, number>;
+  impending_counters?: number;
+  chapters?: string[];
+}
 
-  // --- Surveil Lands ---
-  "Undercity Sewers": {
-    name: "Undercity Sewers",
-    type: "land",
-    subtype: "surveil",
-    manaValue: 0,
-    entersTapped: true,
-    colors: ["U", "B"],
-    hasSurveil: true,
-    surveilAmount: 1,
-  },
-  "Underground Mortuary": {
-    name: "Underground Mortuary",
-    type: "land",
-    subtype: "surveil",
-    manaValue: 0,
-    entersTapped: true,
-    colors: ["B", "G"],
-    hasSurveil: true,
-    surveilAmount: 1,
-  },
+// Convert color names from JSON format to ManaColor
+function convertColorName(color: string): ManaColor {
+  const colorMap: Record<string, ManaColor> = {
+    white: "W",
+    blue: "U",
+    black: "B",
+    red: "R",
+    green: "G",
+    colorless: "C",
+    // Also handle already-converted format
+    W: "W",
+    U: "U",
+    B: "B",
+    R: "R",
+    G: "G",
+    C: "C",
+  };
+  return colorMap[color] || (color as ManaColor);
+}
 
-  // --- Utility Lands ---
-  "Cavern of Souls": {
-    name: "Cavern of Souls",
-    type: "land",
-    subtype: "utility",
-    manaValue: 0,
-    entersTapped: false,
-    colors: ["C"], // Can produce any color for chosen creature type
-  },
-  "Restless Cottage": {
-    name: "Restless Cottage",
-    type: "land",
-    subtype: "utility",
-    manaValue: 0,
-    entersTapped: true,
-    colors: ["B", "G"],
-  },
-  "Wastewood Verge": {
-    name: "Wastewood Verge",
-    type: "land",
-    subtype: "utility",
-    manaValue: 0,
-    entersTapped: false,
-    colors: ["G", "B"], // B only if controlling Swamp/Forest
-  },
-  "Gloomlake Verge": {
-    name: "Gloomlake Verge",
-    type: "land",
-    subtype: "utility",
-    manaValue: 0,
-    entersTapped: false,
-    colors: ["U", "B"], // B only if controlling Island/Swamp
-  },
-  "Multiversal Passage": {
-    name: "Multiversal Passage",
-    type: "land",
-    subtype: "utility",
-    manaValue: 0,
-    entersTapped: "conditional", // Pay 2 life or tapped
-    colors: ["W", "U", "B", "R", "G"], // Choose one basic type
-  },
+// Convert mana cost from JSON format to ManaCost
+function convertManaCost(jsonCost: Record<string, number> | undefined): ManaCost | undefined {
+  if (!jsonCost) return undefined;
+  const result: ManaCost = {};
+  for (const [key, value] of Object.entries(jsonCost)) {
+    if (key === "generic") {
+      result.generic = value;
+    } else {
+      const color = convertColorName(key);
+      result[color] = value;
+    }
+  }
+  return result;
+}
 
-  // --- Fastlands ---
-  "Blooming Marsh": {
-    name: "Blooming Marsh",
-    type: "land",
-    subtype: "fastland",
-    manaValue: 0,
-    entersTapped: "conditional", // Untapped if ≤2 other lands
-    colors: ["B", "G"],
-  },
+// Determine entersTapped value based on subtype
+function determineEntersTapped(
+  subtype: string | undefined,
+  entersTapped: boolean | undefined
+): boolean | "conditional" {
+  // Shock, fastland, and town lands have conditional entry
+  if (subtype === "shock" || subtype === "fastland" || subtype === "town") {
+    return "conditional";
+  }
+  // Multiversal Passage is utility but still conditional (pay 2 life)
+  // We'll handle this by name check
+  return entersTapped ?? false;
+}
 
-  // --- Town Lands ---
-  "Starting Town": {
-    name: "Starting Town",
-    type: "land",
-    subtype: "town",
-    manaValue: 0,
-    entersTapped: "conditional", // Untapped on turns 1-3
-    colors: ["C", "W", "U", "B", "R", "G"], // C free, any color for 1 life
-  },
+// Convert a single JSON card to the TypeScript Card type
+function convertJsonCard(json: JsonCard): Card {
+  const baseCard = {
+    name: json.name,
+    manaValue: json.mana_value,
+  };
 
-  // --- Creatures ---
-  "Terror of the Peaks": {
-    name: "Terror of the Peaks",
-    type: "creature",
-    manaCost: { R: 2, generic: 3 },
-    manaValue: 5,
-    power: 5,
-    toughness: 4,
-    creatureTypes: ["Dragon"],
-    abilities: ["flying", "etb_damage_trigger"],
-  },
-  "Bringer of the Last Gift": {
-    name: "Bringer of the Last Gift",
-    type: "creature",
-    manaCost: { B: 2, generic: 6 },
-    manaValue: 8,
-    power: 6,
-    toughness: 6,
-    creatureTypes: ["Vampire", "Demon"],
-    abilities: ["flying", "etb_mass_reanimate"],
-  },
-  "Overlord of the Balemurk": {
-    name: "Overlord of the Balemurk",
-    type: "creature",
-    manaCost: { B: 2, generic: 3 },
-    impendingCost: { B: 1, generic: 1 }, // {1}{B} = 2 mana
-    impendingCounters: 5,
-    manaValue: 5,
-    power: 5,
-    toughness: 5,
-    creatureTypes: ["Avatar", "Horror"],
-    abilities: ["impending_5", "etb_or_attack_mill_4_return"],
-  },
-  "Kiora, the Rising Tide": {
-    name: "Kiora, the Rising Tide",
-    type: "creature",
-    manaCost: { U: 1, generic: 2 },
-    manaValue: 3,
-    power: 3,
-    toughness: 2,
-    isLegendary: true,
-    creatureTypes: ["Merfolk", "Noble"],
-    abilities: ["etb_draw_2_discard_2", "threshold_create_octopus"],
-  },
-  "Town Greeter": {
-    name: "Town Greeter",
-    type: "creature",
-    manaCost: { G: 1, generic: 1 },
-    manaValue: 2,
-    power: 1,
-    toughness: 1,
-    creatureTypes: ["Human", "Citizen"],
-    abilities: ["etb_mill_4_return_land"],
-  },
-  "Superior Spider-Man": {
-    name: "Superior Spider-Man",
-    type: "creature",
-    manaCost: { U: 1, B: 1, generic: 2 },
-    manaValue: 4,
-    power: 4,
-    toughness: 4,
-    isLegendary: true,
-    creatureTypes: ["Spider", "Human", "Hero"],
-    abilities: ["mind_swap_copy"],
-  },
-  // Alias: Kavaero, Mind-Bitten (paper name for Superior Spider-Man in Arena)
-  "Kavaero, Mind-Bitten": {
-    name: "Superior Spider-Man", // Use the internal name for consistency
-    type: "creature",
-    manaCost: { U: 1, B: 1, generic: 2 },
-    manaValue: 4,
-    power: 4,
-    toughness: 4,
-    isLegendary: true,
-    creatureTypes: ["Spider", "Human", "Hero"],
-    abilities: ["mind_swap_copy"],
-  },
+  if (json.card_type === "land") {
+    let entersTapped = determineEntersTapped(json.subtype, json.enters_tapped);
+    // Special case for Multiversal Passage - it's utility but conditional
+    if (json.name === "Multiversal Passage") {
+      entersTapped = "conditional";
+    }
 
-  // --- Spells ---
-  "Analyze the Pollen": {
-    name: "Analyze the Pollen",
-    type: "sorcery",
-    manaCost: { G: 1 },
-    manaValue: 1,
-    abilities: ["search_land_or_creature_with_evidence"],
-  },
-  "Cache Grab": {
-    name: "Cache Grab",
-    type: "instant",
-    manaCost: { G: 1, generic: 1 },
-    manaValue: 2,
-    abilities: ["mill_4_return_permanent"],
-  },
-  "Dredger's Insight": {
-    name: "Dredger's Insight",
-    type: "enchantment",
-    manaCost: { G: 1, generic: 1 },
-    manaValue: 2,
-    abilities: ["etb_mill_4_return_artifact_creature_land", "graveyard_leave_lifegain"],
-  },
-  "Awaken the Honored Dead": {
-    name: "Awaken the Honored Dead",
-    type: "saga",
-    manaCost: { B: 1, G: 1, U: 1 },
-    manaValue: 3,
-    chapters: [
-      "destroy_nonland_permanent",
-      "mill_3",
-      "discard_return_creature_or_land",
-    ],
-  },
-};
+    const landCard: LandCard = {
+      ...baseCard,
+      type: "land",
+      subtype: (json.subtype || "basic") as LandSubtype,
+      entersTapped,
+      colors: (json.colors || []).map(convertColorName),
+    };
+    if (json.has_surveil) landCard.hasSurveil = true;
+    if (json.surveil_amount) landCard.surveilAmount = json.surveil_amount;
+    return landCard;
+  }
+
+  if (json.card_type === "creature") {
+    const creatureCard: CreatureCard = {
+      ...baseCard,
+      type: "creature",
+      manaCost: convertManaCost(json.mana_cost),
+      power: json.power || 0,
+      toughness: json.toughness || 0,
+      creatureTypes: json.creature_types || [],
+      abilities: json.abilities || [],
+    };
+    if (json.is_legendary) creatureCard.isLegendary = true;
+    if (json.impending_cost) creatureCard.impendingCost = convertManaCost(json.impending_cost);
+    if (json.impending_counters) creatureCard.impendingCounters = json.impending_counters;
+    return creatureCard;
+  }
+
+  if (json.card_type === "saga") {
+    return {
+      ...baseCard,
+      type: "saga",
+      manaCost: convertManaCost(json.mana_cost),
+      chapters: json.chapters || [],
+    } as SagaCard;
+  }
+
+  // instant, sorcery, enchantment
+  return {
+    ...baseCard,
+    type: json.card_type as CardType,
+    manaCost: convertManaCost(json.mana_cost),
+    abilities: json.abilities || [],
+  } as SpellCard;
+}
+
+// Load and convert cards from JSON file
+function loadCardDatabase(): Record<string, Card> {
+  // Get the directory of the current module
+  const __filename = fileURLToPath(import.meta.url);
+  const __dirname = dirname(__filename);
+  const cardsPath = join(__dirname, "cards.json");
+
+  const jsonContent = readFileSync(cardsPath, "utf-8");
+  const jsonCards: JsonCard[] = JSON.parse(jsonContent);
+
+  const database: Record<string, Card> = {};
+  for (const jsonCard of jsonCards) {
+    const card = convertJsonCard(jsonCard);
+    database[card.name] = card;
+
+    // Add alias for Kavaero -> Superior Spider-Man
+    if (card.name === "Kavaero, Mind-Bitten") {
+      database["Superior Spider-Man"] = { ...card, name: "Superior Spider-Man" };
+    }
+  }
+
+  return database;
+}
+
+const CARD_DATABASE: Record<string, Card> = loadCardDatabase();
 
 // ============================================================================
 // DECK REPRESENTATION
 // ============================================================================
-
-import { readFileSync } from "fs";
 
 interface DeckEntry {
   count: number;
@@ -2240,7 +2164,54 @@ function mainPhase(state: GameState): void {
     c => c.name === "Bringer of the Last Gift" || c.name === "Terror of the Peaks"
   );
   const kioraInHand = state.hand.find(c => c.name === "Kiora, the Rising Tide");
-  const shouldPrioritizeKiora = hasBringerOrTerrorInHand && kioraInHand && canCastSpell(kioraInHand, state);
+
+  // Check if we can cast Kiora now OR if we could cast it after playing an untapped land
+  const couldCastKioraAfterLandDrop = (): boolean => {
+    if (!kioraInHand) return false;
+
+    // Can cast now?
+    if (canCastSpell(kioraInHand, state)) return true;
+
+    // If we've already played a land, no look-ahead needed
+    if (state.landPlayedThisTurn) return false;
+
+    // Check if playing an untapped land would enable Kiora
+    const currentMana = getMaxAvailableMana(state);
+    const kioraCost = kioraInHand.manaValue || 3;
+
+    // Would one more mana be enough?
+    if (currentMana + 1 < kioraCost) return false;
+
+    // Check if we have an untapped land that produces U (Kiora needs U)
+    const hasUntappedLandWithU = state.hand.some(c => {
+      if (c.type !== 'land') return false;
+      const land = c as LandCard;
+      if (!willLandEnterUntapped(land, state)) return false;
+      // Check if land produces U
+      return land.colors.includes('U');
+    });
+
+    // Also check if we already have U available and just need an untapped land for mana count
+    const hasUAvailable = state.battlefield.some(p => {
+      if (p.card.type !== 'land' || p.tapped) return false;
+      const colors = canTapForMana(p, state);
+      return colors.includes('U');
+    });
+
+    if (hasUAvailable) {
+      // We have U, just need any untapped land for the mana count
+      const hasAnyUntappedLand = state.hand.some(c => {
+        if (c.type !== 'land') return false;
+        return willLandEnterUntapped(c as LandCard, state);
+      });
+      return hasAnyUntappedLand;
+    }
+
+    // We need the new land to provide U
+    return hasUntappedLandWithU;
+  };
+
+  const shouldPrioritizeKiora = hasBringerOrTerrorInHand && kioraInHand && couldCastKioraAfterLandDrop();
 
   if (!state.landPlayedThisTurn && !shouldPrioritizeKiora) {
     let foundLandFromMill = false;
