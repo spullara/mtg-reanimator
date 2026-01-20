@@ -147,6 +147,15 @@ fn run_simulation(db: &CardDatabase, deck_file: &str, num_games: usize, seed: Op
         (0..num_games)
             .map(|i| run_game(&deck, base_seed + i as u64, db, verbose && i == 0))
             .collect()
+    } else if verbose {
+        // Sequential for verbose mode (verbose only makes sense for first game)
+        let seed = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap()
+            .as_nanos() as u64;
+        (0..num_games)
+            .map(|i| run_game(&deck, seed.wrapping_add(i as u64), db, i == 0))
+            .collect()
     } else {
         // Parallel with random seeds
         (0..num_games)
