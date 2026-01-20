@@ -1141,3 +1141,426 @@ mod tests {
     }
 }
 
+/// Calculate total damage from the combo if cast now
+///
+/// Damage sources:
+/// 1. Terror triggers from creatures entering (both from battlefield and graveyard)
+/// 2. Combat damage from creatures already on battlefield (no summoning sickness)
+pub fn calculate_combo_damage(state: &GameState) -> u32 {
+    // Creatures that would be reanimated from graveyard
+    let creatures_in_graveyard: Vec<&Card> = state
+        .graveyard
+        .cards()
+        .iter()
+        .filter(|c| matches!(c, Card::Creature(_)))
+        .collect();
+
+    // Spider-Man copies Bringer (power 6), and Bringer (the copied one) is exiled
+    const BRINGER_POWER: u32 = 6;
+
+    // Count Terrors that will be on battlefield after combo
+    let terrors_in_graveyard = creatures_in_graveyard
+        .iter()
+        .filter(|c| c.name() == "Terror of the Peaks")
+        .count() as u32;
+
+    let terrors_on_battlefield = state
+        .battlefield
+        .permanents()
+        .iter()
+        .filter(|p| {
+            p.card.name() == "Terror of the Peaks" || p.is_copy_of.as_deref() == Some("Terror of the Peaks")
+        })
+        .count() as u32;
+
+    // Calculate Terror trigger damage (IMMEDIATE)
+    // When Spider-Man enters as a copy of Bringer, creatures are reanimated
+    // Each Terror triggers for each creature entering (except itself)
+    //
+    // IMPORTANT: Spider-Man entering does NOT trigger Terrors because Terror is
+    // still in the graveyard at that point. Terrors only trigger for the creatures
+    // that enter simultaneously with them during the mass reanimate.
+
+    let mut terror_damage = 0u32;
+
+    // Terrors already on battlefield trigger for EACH creature entering (including Spider-Man)
+    if terrors_on_battlefield > 0 {
+        terror_damage += BRINGER_POWER * terrors_on_battlefield;
+        for creature in &creatures_in_graveyard {
+            if let Card::Creature(c) = creature {
+                terror_damage += c.power * terrors_on_battlefield;
+            }
+        }
+    }
+
+    // Terrors from graveyard trigger for creatures entering AT THE SAME TIME (during mass reanimate)
+    // They DON'T trigger for Spider-Man (Spider-Man entered BEFORE the mass reanimate)
+    // They trigger for all other creatures entering simultaneously, but NOT for themselves
+    if terrors_in_graveyard > 0 {
+        // Each creature from graveyard triggers Terrors from graveyard (except Terror doesn't trigger for itself)
+        for creature in &creatures_in_graveyard {
+            if let Card::Creature(c) = creature {
+                if c.base.name == "Terror of the Peaks" {
+                    // A Terror entering triggers all OTHER Terrors (from graveyard only - battlefield Terrors already triggered above)
+                    terror_damage += c.power * (terrors_in_graveyard - 1);
+                } else {
+                    terror_damage += c.power * terrors_in_graveyard;
+                }
+            }
+        }
+    }
+
+    // Combat damage from creatures that can attack THIS turn (already on battlefield, no summoning sickness)
+    // These creatures will attack after we cast the combo in main phase 1
+    let current_combat_power: u32 = state
+        .battlefield
+        .permanents()
+        .iter()
+        .filter(|p| {
+            if !matches!(p.card, Card::Creature(_)) {
+                return false;
+            }
+            // Check for impending counters
+            if let Some(counter_count) = p.counters.get(&crate::game::zones::CounterType::Time) {
+                if *counter_count > 0 {
+                    return false;
+                }
+            }
+            // No summoning sickness
+            state.turn > p.turn_entered
+        })
+        .map(|p| {
+            if let Card::Creature(c) = &p.card {
+                c.power
+            } else {
+                0
+            }
+        })
+        .sum();
+
+    // Reanimated creatures have summoning sickness and CAN'T attack this turn
+    // So we don't count them for this turn's damage
+
+    terror_damage + current_combat_power
+}
+
+/// Check if casting the combo NOW would be lethal
+pub fn is_combo_lethal(state: &GameState) -> bool {
+    let expected_damage = calculate_combo_damage(state);
+    expected_damage >= state.opponent_life as u32
+}
+
+#[cfg(test)]
+mod combo_damage_tests {
+    use super::*;
+    use crate::card::{BaseCard, CreatureCard, ManaCost};
+    use crate::game::zones::Permanent;
+
+    #[test]
+    fn test_calculate_combo_damage_no_creatures() {
+        let state = GameState::new();
+        let damage = calculate_combo_damage(&state);
+        assert_eq!(damage, 0);
+    }
+
+    #[test]
+    fn test_calculate_combo_damage_with_terror_on_battlefield() {
+        let mut state = GameState::new();
+        state.opponent_life = 20;
+
+        // Add Terror to battlefield
+        let terror = Card::Creature(CreatureCard {
+            base: BaseCard {
+                name: "Terror of the Peaks".to_string(),
+                mana_cost: ManaCost::default(),
+                mana_value: 4,
+            },
+            power: 3,
+            toughness: 3,
+            is_legendary: false,
+            creature_types: vec![],
+            abilities: vec![],
+            impending_cost: None,
+            impending_counters: None,
+        });
+
+        let permanent = Permanent::new(terror, 1);
+        state.battlefield.add_permanent(permanent);
+
+        // Add Bringer to graveyard
+        let bringer = Card::Creature(CreatureCard {
+            base: BaseCard {
+                name: "Bringer of the Last Gift".to_string(),
+                mana_cost: ManaCost::default(),
+                mana_value: 6,
+            },
+            power: 6,
+            toughness: 6,
+            is_legendary: false,
+            creature_types: vec![],
+            abilities: vec![],
+            impending_cost: None,
+            impending_counters: None,
+        });
+
+        state.graveyard.add_card(bringer);
+
+        let damage = calculate_combo_damage(&state);
+        // Terror on battlefield triggers for Spider-Man (6 power) + Bringer (6 power) = 12 damage
+        assert_eq!(damage, 12);
+    }
+
+    #[test]
+    fn test_calculate_combo_damage_with_terror_in_graveyard() {
+        let mut state = GameState::new();
+        state.opponent_life = 20;
+
+        // Add Terror to graveyard
+        let terror = Card::Creature(CreatureCard {
+            base: BaseCard {
+                name: "Terror of the Peaks".to_string(),
+                mana_cost: ManaCost::default(),
+                mana_value: 4,
+            },
+            power: 3,
+            toughness: 3,
+            is_legendary: false,
+            creature_types: vec![],
+            abilities: vec![],
+            impending_cost: None,
+            impending_counters: None,
+        });
+
+        state.graveyard.add_card(terror);
+
+        // Add Bringer to graveyard
+        let bringer = Card::Creature(CreatureCard {
+            base: BaseCard {
+                name: "Bringer of the Last Gift".to_string(),
+                mana_cost: ManaCost::default(),
+                mana_value: 6,
+            },
+            power: 6,
+            toughness: 6,
+            is_legendary: false,
+            creature_types: vec![],
+            abilities: vec![],
+            impending_cost: None,
+            impending_counters: None,
+        });
+
+        state.graveyard.add_card(bringer);
+
+        let damage = calculate_combo_damage(&state);
+        // Terrors from graveyard trigger for creatures entering AT THE SAME TIME
+        // Bringer (6 power) triggers Terror from graveyard = 6 damage
+        // Terror (3 power) triggers OTHER Terrors from graveyard (terrorsInGraveyard - 1 = 0) = 0 damage
+        // Total: 6 damage
+        assert_eq!(damage, 6);
+    }
+
+    #[test]
+    fn test_calculate_combo_damage_with_combat_creatures() {
+        let mut state = GameState::new();
+        state.turn = 3; // Avoid summoning sickness
+
+        // Add a creature to battlefield that can attack
+        let creature = Card::Creature(CreatureCard {
+            base: BaseCard {
+                name: "Test Creature".to_string(),
+                mana_cost: ManaCost::default(),
+                mana_value: 2,
+            },
+            power: 4,
+            toughness: 2,
+            is_legendary: false,
+            creature_types: vec![],
+            abilities: vec![],
+            impending_cost: None,
+            impending_counters: None,
+        });
+
+        let permanent = Permanent::new(creature, 1); // Entered on turn 1, now turn 3
+        state.battlefield.add_permanent(permanent);
+
+        let damage = calculate_combo_damage(&state);
+        // Combat damage from creature with no summoning sickness
+        assert_eq!(damage, 4);
+    }
+
+    #[test]
+    fn test_calculate_combo_damage_summoning_sickness() {
+        let mut state = GameState::new();
+        state.turn = 2;
+
+        // Add a creature to battlefield that just entered (summoning sickness)
+        let creature = Card::Creature(CreatureCard {
+            base: BaseCard {
+                name: "Test Creature".to_string(),
+                mana_cost: ManaCost::default(),
+                mana_value: 2,
+            },
+            power: 4,
+            toughness: 2,
+            is_legendary: false,
+            creature_types: vec![],
+            abilities: vec![],
+            impending_cost: None,
+            impending_counters: None,
+        });
+
+        let permanent = Permanent::new(creature, 2); // Entered on turn 2, now turn 2
+        state.battlefield.add_permanent(permanent);
+
+        let damage = calculate_combo_damage(&state);
+        // No combat damage due to summoning sickness
+        assert_eq!(damage, 0);
+    }
+
+    #[test]
+    fn test_is_combo_lethal_true() {
+        let mut state = GameState::new();
+        state.opponent_life = 10;
+
+        // Add Terror to battlefield
+        let terror = Card::Creature(CreatureCard {
+            base: BaseCard {
+                name: "Terror of the Peaks".to_string(),
+                mana_cost: ManaCost::default(),
+                mana_value: 4,
+            },
+            power: 3,
+            toughness: 3,
+            is_legendary: false,
+            creature_types: vec![],
+            abilities: vec![],
+            impending_cost: None,
+            impending_counters: None,
+        });
+
+        let permanent = Permanent::new(terror, 1);
+        state.battlefield.add_permanent(permanent);
+
+        // Add Bringer to graveyard
+        let bringer = Card::Creature(CreatureCard {
+            base: BaseCard {
+                name: "Bringer of the Last Gift".to_string(),
+                mana_cost: ManaCost::default(),
+                mana_value: 6,
+            },
+            power: 6,
+            toughness: 6,
+            is_legendary: false,
+            creature_types: vec![],
+            abilities: vec![],
+            impending_cost: None,
+            impending_counters: None,
+        });
+
+        state.graveyard.add_card(bringer);
+
+        // Damage = 12 (Terror triggers for Spider-Man 6 + Bringer 6)
+        // Opponent life = 10
+        // 12 >= 10 = true
+        assert!(is_combo_lethal(&state));
+    }
+
+    #[test]
+    fn test_is_combo_lethal_false() {
+        let mut state = GameState::new();
+        state.opponent_life = 20;
+
+        // Add Terror to battlefield
+        let terror = Card::Creature(CreatureCard {
+            base: BaseCard {
+                name: "Terror of the Peaks".to_string(),
+                mana_cost: ManaCost::default(),
+                mana_value: 4,
+            },
+            power: 3,
+            toughness: 3,
+            is_legendary: false,
+            creature_types: vec![],
+            abilities: vec![],
+            impending_cost: None,
+            impending_counters: None,
+        });
+
+        let permanent = Permanent::new(terror, 1);
+        state.battlefield.add_permanent(permanent);
+
+        // Add Bringer to graveyard
+        let bringer = Card::Creature(CreatureCard {
+            base: BaseCard {
+                name: "Bringer of the Last Gift".to_string(),
+                mana_cost: ManaCost::default(),
+                mana_value: 6,
+            },
+            power: 6,
+            toughness: 6,
+            is_legendary: false,
+            creature_types: vec![],
+            abilities: vec![],
+            impending_cost: None,
+            impending_counters: None,
+        });
+
+        state.graveyard.add_card(bringer);
+
+        // Damage = 12 (Terror triggers for Spider-Man 6 + Bringer 6)
+        // Opponent life = 20
+        // 12 >= 20 = false
+        assert!(!is_combo_lethal(&state));
+    }
+
+    #[test]
+    fn test_calculate_combo_damage_multiple_terrors() {
+        let mut state = GameState::new();
+        state.opponent_life = 20;
+
+        // Add 2 Terrors to battlefield
+        for _ in 0..2 {
+            let terror = Card::Creature(CreatureCard {
+                base: BaseCard {
+                    name: "Terror of the Peaks".to_string(),
+                    mana_cost: ManaCost::default(),
+                    mana_value: 4,
+                },
+                power: 3,
+                toughness: 3,
+                is_legendary: false,
+                creature_types: vec![],
+                abilities: vec![],
+                impending_cost: None,
+                impending_counters: None,
+            });
+
+            let permanent = Permanent::new(terror, 1);
+            state.battlefield.add_permanent(permanent);
+        }
+
+        // Add Bringer to graveyard
+        let bringer = Card::Creature(CreatureCard {
+            base: BaseCard {
+                name: "Bringer of the Last Gift".to_string(),
+                mana_cost: ManaCost::default(),
+                mana_value: 6,
+            },
+            power: 6,
+            toughness: 6,
+            is_legendary: false,
+            creature_types: vec![],
+            abilities: vec![],
+            impending_cost: None,
+            impending_counters: None,
+        });
+
+        state.graveyard.add_card(bringer);
+
+        let damage = calculate_combo_damage(&state);
+        // Each Terror triggers for Spider-Man (6) + Bringer (6) = 12 per Terror
+        // 2 Terrors = 24 damage
+        assert_eq!(damage, 24);
+    }
+}
+
