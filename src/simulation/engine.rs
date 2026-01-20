@@ -194,22 +194,7 @@ fn get_mana_cost(card: &Card) -> &crate::card::ManaCost {
 
 /// Execute main phase: play lands and cast spells
 fn execute_main_phase(state: &mut GameState, db: &CardDatabase, verbose: bool) {
-    // Step 1: Tap all untapped lands for mana
-    let mut lands_to_tap = Vec::new();
-    for (idx, permanent) in state.battlefield.permanents().iter().enumerate() {
-        if matches!(permanent.card, Card::Land(_)) && !permanent.tapped {
-            lands_to_tap.push(idx);
-        }
-    }
-
-    // Tap lands and add mana to pool
-    for idx in lands_to_tap {
-        if let Some(permanent) = state.battlefield.permanents_mut().get_mut(idx) {
-            let _ = cards::tap_land_for_mana(permanent, &mut state.mana_pool);
-        }
-    }
-
-    // Step 2: Play one land if we haven't already
+    // Step 1: Play one land if we haven't already (play BEFORE tapping for mana!)
     if !state.land_played_this_turn {
         let hand_cards = state.hand.cards().to_vec();
         if let Some(land_idx) = DecisionEngine::choose_land_to_play(&hand_cards, state) {
@@ -227,6 +212,21 @@ fn execute_main_phase(state: &mut GameState, db: &CardDatabase, verbose: bool) {
                     println!("  [Land] {}{}", card_name, tapped_str);
                 }
             }
+        }
+    }
+
+    // Step 2: Tap all untapped lands for mana (including newly played land)
+    let mut lands_to_tap = Vec::new();
+    for (idx, permanent) in state.battlefield.permanents().iter().enumerate() {
+        if matches!(permanent.card, Card::Land(_)) && !permanent.tapped {
+            lands_to_tap.push(idx);
+        }
+    }
+
+    // Tap lands and add mana to pool
+    for idx in lands_to_tap {
+        if let Some(permanent) = state.battlefield.permanents_mut().get_mut(idx) {
+            let _ = cards::tap_land_for_mana(permanent, &mut state.mana_pool);
         }
     }
 

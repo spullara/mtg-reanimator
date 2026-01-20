@@ -74,6 +74,16 @@ impl Library {
         self.cards.push(card);
     }
 
+    /// Add a card to the top of the library (front of the vec)
+    pub fn add_to_top(&mut self, card: Card) {
+        self.cards.insert(0, card);
+    }
+
+    /// Peek at the top card without removing it
+    pub fn peek_top(&self) -> Option<&Card> {
+        self.cards.first()
+    }
+
     pub fn draw(&mut self) -> Option<Card> {
         if self.cards.is_empty() {
             None

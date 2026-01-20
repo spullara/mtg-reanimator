@@ -1,7 +1,8 @@
-use crate::card::{Card, CardDatabase, LandSubtype, ManaColor};
+use crate::card::{Card, CardDatabase, CardType, LandSubtype, ManaColor};
 use crate::game::mana::ManaPool;
 use crate::game::state::GameState;
 use crate::game::zones::{CounterType, Permanent};
+use crate::simulation::decisions::DecisionEngine;
 
 /// Check if a creature has impending counters (enters as enchantment)
 pub fn has_impending(card: &Card) -> bool {
@@ -77,46 +78,7 @@ pub fn play_land(state: &mut GameState, card: &Card) -> Result<(), String> {
 
     // Handle surveil lands
     if land.has_surveil && land.surveil_amount > 0 {
-        // Surveil logic: look at top N cards, decide which go to graveyard
-        let surveil_count = land.surveil_amount as usize;
-        let mut to_graveyard = Vec::new();
-        let mut to_keep_on_top = Vec::new();
-
-        // Look at top surveil_count cards
-        for _ in 0..surveil_count {
-            if let Some(card) = state.library.draw() {
-                let name = card.name();
-                let has_kiora_in_hand = state.hand.cards().iter().any(|c| c.name() == "Kiora, the Rising Tide");
-
-                // Decision: put in graveyard if it's a reanimation target or duplicate
-                let put_in_graveyard = matches!(name,
-                    "Bringer of the Last Gift" | "Terror of the Peaks" | "Overlord of the Balemurk" | "Town Greeter"
-                ) || (name == "Kiora, the Rising Tide" && has_kiora_in_hand);
-
-                if put_in_graveyard {
-                    to_graveyard.push(card);
-                } else {
-                    to_keep_on_top.push(card);
-                }
-            }
-        }
-
-        // Put cards back: keep-on-top first, then rest of library, then graveyard cards
-        let mut new_library = to_keep_on_top;
-        while let Some(card) = state.library.draw() {
-            new_library.push(card);
-        }
-        new_library.extend(to_graveyard.clone());
-
-        // Rebuild library
-        for card in new_library {
-            state.library.add_card(card);
-        }
-
-        // Add graveyard cards
-        for card in to_graveyard {
-            state.graveyard.add_card(card);
-        }
+        resolve_surveil(state, land.surveil_amount as usize, false);
     }
 
     state.battlefield.add_permanent(permanent);
@@ -206,9 +168,21 @@ pub fn cast_spell(
             for ability in &spell.abilities {
                 match ability.as_str() {
                     "etb_mill_4_return_artifact_creature_land" => {
-                        // Dredger's Insight: mill 4, return artifact/creature/land
+                        // Dredger's Insight: mill 4, return artifact/creature/land to hand
                         let milled = state.library.mill(4);
+                        let mut milled_cards = Vec::new();
                         for card in milled {
+                            milled_cards.push(card);
+                        }
+
+                        // Choose which card to return (prioritize Spider-Man, then Kiora, then lands)
+                        if let Some(idx) = DecisionEngine::choose_mill_return(&milled_cards, CardType::Creature) {
+                            let card_to_return = milled_cards.remove(idx);
+                            state.hand.add_card(card_to_return);
+                        }
+
+                        // Rest go to graveyard
+                        for card in milled_cards {
                             state.graveyard.add_card(card);
                         }
                     }
@@ -362,6 +336,60 @@ pub fn process_etb_triggers(
     }
 
     Ok(())
+}
+
+/// Resolve surveil mechanic: look at top N cards and decide which go to graveyard
+///
+/// EXACT LOGIC FROM TYPESCRIPT:
+/// - Check hasKioraInHand INSIDE the loop (it can change)
+/// - Only remove from library if putting in graveyard
+/// - If keeping on top, do NOT touch the library - leave card in place
+pub fn resolve_surveil(state: &mut GameState, count: usize, verbose: bool) {
+    let mut to_graveyard: Vec<String> = Vec::new();
+    let mut to_top: Vec<String> = Vec::new();
+
+    for _ in 0..count {
+        // Check if library is empty
+        if state.library.is_empty() {
+            break;
+        }
+
+        // Peek at top card without removing it
+        if let Some(top_card) = state.library.peek_top() {
+            let card_name = top_card.name().to_string();
+
+            // Decision: keep on top or put in graveyard?
+            // Graveyard: Bringer, Terror, Overlord (want to reanimate these)
+            // Also put Kiora if we already have one (for reanimation value)
+            // Top: Spider-Man (MUST stay in hand!), lands, mill spells
+            let has_kiora_in_hand = state.hand.cards().iter().any(|c| c.name() == "Kiora, the Rising Tide");
+            let put_in_graveyard = card_name == "Bringer of the Last Gift"
+                || card_name == "Terror of the Peaks"
+                || card_name == "Overlord of the Balemurk"
+                || (card_name == "Kiora, the Rising Tide" && has_kiora_in_hand)
+                || card_name == "Town Greeter"; // Cheap 1/1, better to reanimate than draw
+
+            if put_in_graveyard {
+                // Remove from library and add to graveyard
+                if let Some(card) = state.library.draw() {
+                    state.graveyard.add_card(card);
+                    to_graveyard.push(card_name);
+                }
+            } else {
+                // Keep on top - do NOT touch the library
+                to_top.push(card_name);
+            }
+        }
+    }
+
+    if verbose && (!to_graveyard.is_empty() || !to_top.is_empty()) {
+        if !to_graveyard.is_empty() {
+            println!("    Surveil -> graveyard: {}", to_graveyard.join(", "));
+        }
+        if !to_top.is_empty() {
+            println!("    Surveil -> kept on top: {}", to_top.join(", "));
+        }
+    }
 }
 
 #[cfg(test)]
@@ -663,6 +691,101 @@ mod tests {
         assert_eq!(state.battlefield.size(), 1);
         let perm = &state.battlefield.permanents()[0];
         assert_eq!(perm.get_counter(CounterType::Time), 0);
+    }
+
+    #[test]
+    fn test_resolve_surveil_puts_bringer_in_graveyard() {
+        let mut state = GameState::new();
+
+        // Add Bringer to library
+        let bringer = Card::Creature(CreatureCard {
+            base: BaseCard {
+                name: "Bringer of the Last Gift".to_string(),
+                mana_cost: ManaCost::default(),
+                mana_value: 8,
+            },
+            power: 6,
+            toughness: 6,
+            is_legendary: false,
+            creature_types: vec![],
+            abilities: vec![],
+            impending_cost: None,
+            impending_counters: None,
+        });
+        state.library.add_card(bringer);
+
+        // Add a land to library
+        let land = Card::Land(LandCard {
+            base: BaseCard {
+                name: "Forest".to_string(),
+                mana_cost: ManaCost::default(),
+                mana_value: 0,
+            },
+            subtype: LandSubtype::Basic,
+            enters_tapped: false,
+            colors: vec![ManaColor::Green],
+            has_surveil: false,
+            surveil_amount: 0,
+        });
+        state.library.add_card(land);
+
+        // Surveil 1
+        resolve_surveil(&mut state, 1, false);
+
+        // Bringer should be in graveyard
+        assert_eq!(state.graveyard.size(), 1);
+        assert_eq!(state.graveyard.cards()[0].name(), "Bringer of the Last Gift");
+
+        // Land should still be in library
+        assert_eq!(state.library.size(), 1);
+        assert_eq!(state.library.peek_top().unwrap().name(), "Forest");
+    }
+
+    #[test]
+    fn test_resolve_surveil_keeps_land_on_top() {
+        let mut state = GameState::new();
+
+        // Add a land to library
+        let land = Card::Land(LandCard {
+            base: BaseCard {
+                name: "Forest".to_string(),
+                mana_cost: ManaCost::default(),
+                mana_value: 0,
+            },
+            subtype: LandSubtype::Basic,
+            enters_tapped: false,
+            colors: vec![ManaColor::Green],
+            has_surveil: false,
+            surveil_amount: 0,
+        });
+        state.library.add_card(land);
+
+        // Add another card below
+        let creature = Card::Creature(CreatureCard {
+            base: BaseCard {
+                name: "Test Creature".to_string(),
+                mana_cost: ManaCost::default(),
+                mana_value: 1,
+            },
+            power: 1,
+            toughness: 1,
+            is_legendary: false,
+            creature_types: vec![],
+            abilities: vec![],
+            impending_cost: None,
+            impending_counters: None,
+        });
+        state.library.add_card(creature);
+
+        // Surveil 1
+        resolve_surveil(&mut state, 1, false);
+
+        // Graveyard should be empty
+        assert_eq!(state.graveyard.size(), 0);
+
+        // Land should still be on top of library
+        assert_eq!(state.library.size(), 2);
+        assert_eq!(state.library.peek_top().unwrap().name(), "Forest");
     }
 }
 
