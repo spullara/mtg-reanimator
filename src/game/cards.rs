@@ -1,5 +1,5 @@
-use crate::card::{Card, CardDatabase, CardType, LandSubtype, ManaColor};
-use crate::game::mana::ManaPool;
+use crate::card::{Card, CardDatabase, CardType, CreatureCard, LandSubtype, ManaCost, ManaColor};
+use crate::game::mana::{can_afford_cost, can_tap_for_mana, ManaPool};
 use crate::game::state::GameState;
 use crate::game::zones::{CounterType, Permanent};
 use crate::simulation::decisions::DecisionEngine;
@@ -108,6 +108,263 @@ pub fn tap_land_for_mana(permanent: &Permanent, mana_pool: &mut ManaPool) -> Res
             ManaColor::Green => mana_pool.add_mana('G', 1),
             ManaColor::Colorless => mana_pool.add_mana('C', 1),
         }
+    }
+
+    Ok(())
+}
+
+/// Tap a specific land for a specific color of mana
+/// Returns (success, life_cost) where life_cost is 1 if Starting Town paid colored mana, 0 otherwise
+pub fn tap_land_for_color_cost(
+    permanent: &Permanent,
+    color: ManaColor,
+    available_colors: &[ManaColor],
+) -> Option<u32> {
+    if !available_colors.contains(&color) {
+        return None;
+    }
+
+    let land = match &permanent.card {
+        Card::Land(l) => l,
+        _ => return None,
+    };
+
+    // Starting Town: pay 1 life for colored mana
+    if land.base.name == "Starting Town" && color != ManaColor::Colorless {
+        Some(1)
+    } else {
+        Some(0)
+    }
+}
+
+/// Tap lands to pay for a mana cost
+/// Strategy: Use lands that only produce the required colors first
+pub fn tap_lands_for_cost(
+    cost: &ManaCost,
+    state: &mut GameState,
+    for_creature: Option<&CreatureCard>,
+) -> bool {
+    // Get list of untapped lands with their available colors
+    let land_info: Vec<(usize, Vec<ManaColor>)> = state
+        .battlefield
+        .permanents()
+        .iter()
+        .enumerate()
+        .filter(|(_, p)| matches!(p.card, Card::Land(_)) && !p.tapped)
+        .map(|(i, p)| (i, can_tap_for_mana(p, state, for_creature)))
+        .collect();
+
+    // Pay colored costs first
+    let color_requirements = vec![
+        (ManaColor::White, cost.white),
+        (ManaColor::Blue, cost.blue),
+        (ManaColor::Black, cost.black),
+        (ManaColor::Red, cost.red),
+        (ManaColor::Green, cost.green),
+        (ManaColor::Colorless, cost.colorless),
+    ];
+
+    for (color, amount) in color_requirements {
+        if amount == 0 {
+            continue;
+        }
+
+        let mut remaining = amount;
+
+        // Prefer lands that ONLY produce this color
+        for (idx, colors) in &land_info {
+            if remaining == 0 {
+                break;
+            }
+            if state.battlefield.permanents()[*idx].tapped {
+                continue;
+            }
+            if colors.len() == 1 && colors[0] == color {
+                // This land only produces this color - use it
+                if let Some(life_cost) = tap_land_for_color_cost(&state.battlefield.permanents()[*idx], color, colors) {
+                    if life_cost > 0 && state.life <= 1 {
+                        continue; // Can't afford the life cost
+                    }
+                    state.life -= life_cost as i32;
+                    state.battlefield.permanents_mut()[*idx].tapped = true;
+                    match color {
+                        ManaColor::White => state.mana_pool.add_mana('W', 1),
+                        ManaColor::Blue => state.mana_pool.add_mana('U', 1),
+                        ManaColor::Black => state.mana_pool.add_mana('B', 1),
+                        ManaColor::Red => state.mana_pool.add_mana('R', 1),
+                        ManaColor::Green => state.mana_pool.add_mana('G', 1),
+                        ManaColor::Colorless => state.mana_pool.add_mana('C', 1),
+                    }
+                    remaining -= 1;
+                }
+            }
+        }
+
+        // Then use multi-color lands
+        if remaining > 0 {
+            for (idx, colors) in &land_info {
+                if remaining == 0 {
+                    break;
+                }
+                if state.battlefield.permanents()[*idx].tapped {
+                    continue;
+                }
+                if colors.contains(&color) {
+                    if let Some(life_cost) = tap_land_for_color_cost(&state.battlefield.permanents()[*idx], color, colors) {
+                        if life_cost > 0 && state.life <= 1 {
+                            continue; // Can't afford the life cost
+                        }
+                        state.life -= life_cost as i32;
+                        state.battlefield.permanents_mut()[*idx].tapped = true;
+                        match color {
+                            ManaColor::White => state.mana_pool.add_mana('W', 1),
+                            ManaColor::Blue => state.mana_pool.add_mana('U', 1),
+                            ManaColor::Black => state.mana_pool.add_mana('B', 1),
+                            ManaColor::Red => state.mana_pool.add_mana('R', 1),
+                            ManaColor::Green => state.mana_pool.add_mana('G', 1),
+                            ManaColor::Colorless => state.mana_pool.add_mana('C', 1),
+                        }
+                        remaining -= 1;
+                    }
+                }
+            }
+        }
+
+        if remaining > 0 {
+            return false; // Couldn't pay
+        }
+    }
+
+    // Pay generic with remaining untapped lands
+    let mut generic_remaining = cost.generic;
+    for (idx, colors) in &land_info {
+        if generic_remaining == 0 {
+            break;
+        }
+        if state.battlefield.permanents()[*idx].tapped {
+            continue;
+        }
+        if !colors.is_empty() {
+            if let Some(life_cost) = tap_land_for_color_cost(&state.battlefield.permanents()[*idx], colors[0], colors) {
+                if life_cost > 0 && state.life <= 1 {
+                    continue; // Can't afford the life cost
+                }
+                state.life -= life_cost as i32;
+                state.battlefield.permanents_mut()[*idx].tapped = true;
+                match colors[0] {
+                    ManaColor::White => state.mana_pool.add_mana('W', 1),
+                    ManaColor::Blue => state.mana_pool.add_mana('U', 1),
+                    ManaColor::Black => state.mana_pool.add_mana('B', 1),
+                    ManaColor::Red => state.mana_pool.add_mana('R', 1),
+                    ManaColor::Green => state.mana_pool.add_mana('G', 1),
+                    ManaColor::Colorless => state.mana_pool.add_mana('C', 1),
+                }
+                generic_remaining -= 1;
+            }
+        }
+    }
+
+    // Now pay the actual cost from pool
+    state.mana_pool.pay(cost)
+}
+
+/// Cast a spell and resolve its effects
+pub fn cast_spell_with_mana(
+    state: &mut GameState,
+    card: &Card,
+    _db: &CardDatabase,
+) -> Result<(), String> {
+    // Check if we can cast the spell
+    if !crate::game::mana::can_cast_spell(card, state) {
+        return Err("Cannot cast spell".to_string());
+    }
+
+    let for_creature = match card {
+        Card::Creature(c) => Some(c),
+        _ => None,
+    };
+
+    // Determine if we should cast for impending cost
+    let mut use_impending = false;
+    let cost_to_pay = if let Card::Creature(c) = card {
+        if let Some(impending_cost) = &c.impending_cost {
+            // Prefer impending if we can't afford regular cost OR if impending is good strategy
+            // For Overlord, always use impending when possible - it's cheaper and the mill triggers immediately
+            if !can_afford_cost(&c.base.mana_cost, state, for_creature) {
+                // Can't afford regular cost, must use impending
+                use_impending = true;
+                impending_cost.clone()
+            } else if can_afford_cost(impending_cost, state, for_creature) {
+                // Can afford both - prefer impending for Overlord (faster, mill happens immediately)
+                use_impending = true;
+                impending_cost.clone()
+            } else {
+                c.base.mana_cost.clone()
+            }
+        } else {
+            c.base.mana_cost.clone()
+        }
+    } else {
+        match card {
+            Card::Instant(c) => c.base.mana_cost.clone(),
+            Card::Sorcery(c) => c.base.mana_cost.clone(),
+            Card::Enchantment(c) => c.base.mana_cost.clone(),
+            Card::Saga(c) => c.base.mana_cost.clone(),
+            _ => return Err("Invalid card type".to_string()),
+        }
+    };
+
+    // Tap lands and pay cost
+    if !tap_lands_for_cost(&cost_to_pay, state, for_creature) {
+        return Err("Could not pay mana cost".to_string());
+    }
+
+    // Handle by card type
+    match card {
+        Card::Creature(c) => {
+            let mut permanent = Permanent::new(card.clone(), state.turn);
+
+            // Handle impending creatures
+            if use_impending && c.impending_counters.is_some() {
+                let counters = c.impending_counters.unwrap_or(0);
+                permanent.add_counter(CounterType::Time, counters);
+            }
+
+            state.battlefield.add_permanent(permanent);
+
+            // Resolve creature ETB triggers
+            // (This would be handled by process_etb_triggers in a full implementation)
+        }
+        Card::Enchantment(_) => {
+            let permanent = Permanent::new(card.clone(), state.turn);
+            state.battlefield.add_permanent(permanent);
+
+            // Resolve enchantment ETB (Dredger's Insight)
+            if card.name() == "Dredger's Insight" {
+                // This would be handled by resolve_spell_ability in a full implementation
+            }
+        }
+        Card::Saga(_) => {
+            let mut permanent = Permanent::new(card.clone(), state.turn);
+            permanent.add_counter(CounterType::Time, 1); // Start with 1 lore counter
+            state.battlefield.add_permanent(permanent);
+
+            // Resolve chapter 1 immediately
+            // (This would be handled by resolve_saga_chapter in a full implementation)
+        }
+        Card::Instant(_) => {
+            // Resolve spell ability first
+            // (This would be handled by resolve_spell_ability in a full implementation)
+            // Goes to graveyard after resolution
+            state.graveyard.add_card(card.clone());
+        }
+        Card::Sorcery(_) => {
+            // Resolve spell ability first
+            // (This would be handled by resolve_spell_ability in a full implementation)
+            // Goes to graveyard after resolution
+            state.graveyard.add_card(card.clone());
+        }
+        Card::Land(_) => return Err("Cannot cast land as spell".to_string()),
     }
 
     Ok(())

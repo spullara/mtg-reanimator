@@ -1,4 +1,6 @@
-use crate::card::ManaCost;
+use crate::card::{Card, CreatureCard, ManaCost, ManaColor};
+use crate::game::state::GameState;
+use crate::game::zones::Permanent;
 
 /// Mana pool tracking each color and colorless mana
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -141,6 +143,227 @@ impl ManaPool {
 impl Default for ManaPool {
     fn default() -> Self {
         Self::new()
+    }
+}
+
+/// Get the colors a land can tap for
+/// Handles special lands like Cavern of Souls, Verge lands, Starting Town
+pub fn can_tap_for_mana(
+    permanent: &Permanent,
+    state: &GameState,
+    for_creature: Option<&CreatureCard>,
+) -> Vec<ManaColor> {
+    if permanent.tapped {
+        return Vec::new();
+    }
+
+    let land = match &permanent.card {
+        Card::Land(l) => l,
+        _ => return Vec::new(),
+    };
+
+    // Handle Cavern of Souls - colored mana ONLY for creatures of chosen type
+    if land.base.name == "Cavern of Souls" {
+        // Cavern always produces {C}
+        // Cavern produces any color ONLY for creatures of the chosen type
+        if let (Some(creature), Some(chosen_type)) = (for_creature, &permanent.chosen_type) {
+            if creature_matches_cavern_type(creature, chosen_type) {
+                // Creature matches! Can produce any color
+                return vec![
+                    ManaColor::White,
+                    ManaColor::Blue,
+                    ManaColor::Black,
+                    ManaColor::Red,
+                    ManaColor::Green,
+                    ManaColor::Colorless,
+                ];
+            }
+        }
+        // No creature context or creature doesn't match - only colorless
+        return vec![ManaColor::Colorless];
+    }
+
+    // Handle Wastewood Verge - {B} only if controlling Swamp/Forest
+    if land.base.name == "Wastewood Verge" {
+        let has_swamp_or_forest = state
+            .battlefield
+            .permanents()
+            .iter()
+            .any(|p| {
+                if let Card::Land(l) = &p.card {
+                    matches!(
+                        l.base.name.as_str(),
+                        "Swamp"
+                            | "Forest"
+                            | "Watery Grave"
+                            | "Underground Mortuary"
+                            | "Undercity Sewers"
+                    )
+                } else {
+                    false
+                }
+            });
+        if has_swamp_or_forest {
+            return vec![ManaColor::Green, ManaColor::Black];
+        }
+        return vec![ManaColor::Green];
+    }
+
+    // Handle Gloomlake Verge - {B} only if controlling Island/Swamp
+    if land.base.name == "Gloomlake Verge" {
+        let has_island_or_swamp = state
+            .battlefield
+            .permanents()
+            .iter()
+            .any(|p| {
+                if let Card::Land(l) = &p.card {
+                    matches!(
+                        l.base.name.as_str(),
+                        "Island" | "Swamp" | "Watery Grave" | "Undercity Sewers"
+                    )
+                } else {
+                    false
+                }
+            });
+        if has_island_or_swamp {
+            return vec![ManaColor::Blue, ManaColor::Black];
+        }
+        return vec![ManaColor::Blue];
+    }
+
+    // Handle Multiversal Passage - produces chosen color
+    if land.base.name == "Multiversal Passage" {
+        if let Some(chosen_type) = &permanent.chosen_basic_type {
+            if let Ok(color) = parse_mana_color(chosen_type) {
+                return vec![color];
+            }
+        }
+    }
+
+    // Handle Starting Town - produces C for free, or any color for 1 life
+    if land.base.name == "Starting Town" {
+        if state.life > 1 {
+            // Can pay 1 life for any color
+            return vec![
+                ManaColor::Colorless,
+                ManaColor::White,
+                ManaColor::Blue,
+                ManaColor::Black,
+                ManaColor::Red,
+                ManaColor::Green,
+            ];
+        }
+        // Only colorless if we can't afford the life
+        return vec![ManaColor::Colorless];
+    }
+
+    // Return land colors for other lands
+    land.colors.clone()
+}
+
+/// Check if a creature matches a Cavern of Souls chosen type
+fn creature_matches_cavern_type(creature: &CreatureCard, chosen_type: &str) -> bool {
+    creature.creature_types.iter().any(|t| t == chosen_type)
+}
+
+/// Parse a mana color string to ManaColor enum
+fn parse_mana_color(color_str: &str) -> Result<ManaColor, String> {
+    match color_str {
+        "W" => Ok(ManaColor::White),
+        "U" => Ok(ManaColor::Blue),
+        "B" => Ok(ManaColor::Black),
+        "R" => Ok(ManaColor::Red),
+        "G" => Ok(ManaColor::Green),
+        "C" => Ok(ManaColor::Colorless),
+        _ => Err(format!("Unknown mana color: {}", color_str)),
+    }
+}
+
+/// Check if we can afford a mana cost given the current game state
+/// This checks if we have enough untapped lands to produce the required colors
+pub fn can_afford_cost(
+    cost: &ManaCost,
+    state: &GameState,
+    for_creature: Option<&CreatureCard>,
+) -> bool {
+    let max_mana = state
+        .battlefield
+        .permanents()
+        .iter()
+        .filter(|p| matches!(p.card, Card::Land(_)) && !p.tapped)
+        .count() as u32;
+
+    // Quick check: do we have enough total mana?
+    let total_cost = cost.white + cost.blue + cost.black + cost.red + cost.green + cost.colorless + cost.generic;
+
+    if max_mana < total_cost {
+        return false;
+    }
+
+    // Check if we can produce each required color
+    let mut color_counts = ManaPool::new();
+
+    for permanent in state.battlefield.permanents() {
+        if permanent.tapped {
+            continue;
+        }
+        if !matches!(permanent.card, Card::Land(_)) {
+            continue;
+        }
+        let colors = can_tap_for_mana(permanent, state, for_creature);
+        for color in colors {
+            match color {
+                ManaColor::White => color_counts.white += 1,
+                ManaColor::Blue => color_counts.blue += 1,
+                ManaColor::Black => color_counts.black += 1,
+                ManaColor::Red => color_counts.red += 1,
+                ManaColor::Green => color_counts.green += 1,
+                ManaColor::Colorless => color_counts.colorless += 1,
+            }
+        }
+    }
+
+    // Check colored requirements
+    if cost.white > 0 && color_counts.white < cost.white {
+        return false;
+    }
+    if cost.blue > 0 && color_counts.blue < cost.blue {
+        return false;
+    }
+    if cost.black > 0 && color_counts.black < cost.black {
+        return false;
+    }
+    if cost.red > 0 && color_counts.red < cost.red {
+        return false;
+    }
+    if cost.green > 0 && color_counts.green < cost.green {
+        return false;
+    }
+
+    true
+}
+
+/// Check if a spell can be cast with the current game state
+pub fn can_cast_spell(card: &Card, state: &GameState) -> bool {
+    match card {
+        Card::Land(_) => false,
+        Card::Creature(c) => {
+            let for_creature = Some(c);
+
+            // For creatures with impending, check if we can cast for impending cost
+            if let Some(impending_cost) = &c.impending_cost {
+                if can_afford_cost(impending_cost, state, for_creature) {
+                    return true;
+                }
+            }
+
+            // Check regular mana cost
+            can_afford_cost(&c.base.mana_cost, state, for_creature)
+        }
+        Card::Instant(c) => can_afford_cost(&c.base.mana_cost, state, None),
+        Card::Sorcery(c) => can_afford_cost(&c.base.mana_cost, state, None),
+        Card::Enchantment(c) => can_afford_cost(&c.base.mana_cost, state, None),
+        Card::Saga(c) => can_afford_cost(&c.base.mana_cost, state, None),
     }
 }
 
