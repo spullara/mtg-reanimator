@@ -39,8 +39,6 @@ pub struct CardLocation {
     pub in_hand: u32,
     pub in_graveyard: u32,
     pub on_battlefield: u32,
-    pub in_library: u32,
-    pub in_exile: u32,
 }
 
 /// Results from analyzing a single game at turn 4
@@ -49,14 +47,11 @@ pub struct Turn4Analysis {
     pub primary_failure: FailureReason,
     pub lands_count: u32,
     pub colors_available: (bool, bool, bool), // (U, B, G)
-    pub card_locations: CardLocations,
-    pub combo_damage: u32,
 }
 
 /// Aggregate results from analyzing many games
 #[derive(Debug, Default)]
 pub struct AnalysisResults {
-    pub total_games: usize,
     pub failure_counts: HashMap<FailureReason, usize>,
     pub avg_lands: f64,
     pub color_availability: (f64, f64, f64), // % of games with U, B, G available
@@ -184,13 +179,9 @@ pub fn analyze_turn4_state(state: &GameState) -> Turn4Analysis {
         }
     }
     
-    // Note: Exile zone doesn't have a public cards() method
-    // Cards in exile are typically removed from consideration anyway
-    // (e.g., Bringer gets exiled when copied by Spider-Man)
-    
     // Calculate expected damage
     let combo_damage = calculate_combo_damage(state);
-    
+
     // Determine primary failure reason (in priority order)
     let primary_failure = determine_primary_failure(
         total_mana, has_blue, has_black, has_green,
@@ -201,8 +192,6 @@ pub fn analyze_turn4_state(state: &GameState) -> Turn4Analysis {
         primary_failure,
         lands_count: total_mana,  // Total mana available (battlefield + playable land)
         colors_available: (has_blue, has_black, has_green),
-        card_locations: locations,
-        combo_damage,
     }
 }
 
@@ -325,7 +314,6 @@ pub fn run_game_to_turn4(
 /// Aggregate results from multiple analyses
 pub fn aggregate_results(analyses: &[Turn4Analysis]) -> AnalysisResults {
     let mut results = AnalysisResults {
-        total_games: analyses.len(),
         failure_counts: HashMap::new(),
         avg_lands: 0.0,
         color_availability: (0.0, 0.0, 0.0),
