@@ -526,13 +526,31 @@ pub fn main_phase(state: &mut GameState, db: &CardDatabase, verbose: bool, rng: 
                     return false;
                 }
 
-                // Only cast Spider-Man if the combo would be LETHAL
+                // Spider-Man casting logic:
+                // 1. If Bringer in graveyard and combo is lethal -> cast (THE COMBO!)
+                // 2. If no Bringer in graveyard but have 2+ Spider-Man in hand AND
+                //    a mill creature in graveyard -> cast to dig for Bringer
                 if c.name() == "Superior Spider-Man" {
-                    if !has_bringer_in_graveyard {
-                        return false; // Need Bringer in graveyard
-                    }
-                    if !combo_is_lethal {
-                        return false; // Wait until it would kill
+                    if has_bringer_in_graveyard {
+                        // Only cast if combo would be lethal
+                        if !combo_is_lethal {
+                            return false; // Wait until it would kill
+                        }
+                    } else {
+                        // No Bringer in graveyard - check if we should dig
+                        let spider_man_count = state.hand.cards().iter()
+                            .filter(|card| card.name() == "Superior Spider-Man")
+                            .count();
+                        let has_mill_creature_in_gy = state.graveyard.cards().iter()
+                            .any(|card| matches!(card.name(),
+                                "Overlord of the Balemurk" |
+                                "Kiora, the Rising Tide" |
+                                "Town Greeter"));
+
+                        if spider_man_count < 2 || !has_mill_creature_in_gy {
+                            return false; // Can't dig effectively
+                        }
+                        // Otherwise, allow casting to dig for Bringer
                     }
                 }
 
