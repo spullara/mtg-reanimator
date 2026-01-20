@@ -544,6 +544,69 @@ impl DecisionEngine {
         })
     }
 
+    /// Select which card to return when Overlord of the Balemurk's ETB ability triggers
+    /// This is the exact port of TypeScript selectForOverlord (lines 1429-1474)
+    ///
+    /// Priority:
+    /// 1. Spider-Man if Bringer in graveyard and we don't have Spider-Man in hand
+    /// 2. Kiora if Bringer stuck in hand (to discard it)
+    /// 3. Town Greeter if early game (< 4 lands)
+    /// Otherwise: DON'T return anything - leave creatures for reanimate!
+    pub fn select_for_overlord<'a>(cards: &'a [Card], state: &GameState) -> Option<&'a Card> {
+        if cards.is_empty() {
+            return None;
+        }
+
+        // Calculate game state metrics
+        let has_bringer_in_graveyard = state
+            .graveyard
+            .cards()
+            .iter()
+            .any(|c| c.name() == "Bringer of the Last Gift");
+        let has_spider_man_in_hand = state
+            .hand
+            .cards()
+            .iter()
+            .any(|c| c.name() == "Superior Spider-Man");
+        let has_bringer_in_hand = state
+            .hand
+            .cards()
+            .iter()
+            .any(|c| c.name() == "Bringer of the Last Gift");
+
+        // Priority 1: Superior Spider-Man if we need it for the combo
+        if has_bringer_in_graveyard && !has_spider_man_in_hand {
+            if let Some(spider_man) = cards.iter().find(|c| c.name() == "Superior Spider-Man") {
+                return Some(spider_man);
+            }
+        }
+
+        // Priority 2: Kiora if Bringer is stuck in hand (need to discard it)
+        if has_bringer_in_hand {
+            if let Some(kiora) = cards.iter().find(|c| c.name() == "Kiora, the Rising Tide") {
+                return Some(kiora);
+            }
+        }
+
+        // Priority 3: Town Greeter - cheap enabler that can mill more
+        // Only get it if we're early game and need to keep milling
+        let land_count = state
+            .battlefield
+            .permanents()
+            .iter()
+            .filter(|p| matches!(p.card, Card::Land(_)))
+            .count();
+
+        if land_count < 4 {
+            if let Some(town_greeter) = cards.iter().find(|c| c.name() == "Town Greeter") {
+                return Some(town_greeter);
+            }
+        }
+
+        // Otherwise: DON'T return anything! Leave creatures in graveyard for reanimation
+        None
+    }
+
     /// Choose which card to return from mill
     /// Priority: Spider-Man > Kiora > lands (if desperate) > other creatures > nothing
     pub fn choose_mill_return(graveyard: &[Card], _card_type: CardType) -> Option<usize> {
@@ -1082,6 +1145,190 @@ mod tests {
         let choice = DecisionEngine::select_best_from_mill(&cards, &state);
         // Should choose forest, never Terror
         assert_eq!(choice.map(|c| c.name()), Some("Forest"));
+    }
+
+    // Tests for select_for_overlord
+    #[test]
+    fn test_select_for_overlord_empty_cards() {
+        let state = GameState::new();
+        let cards: Vec<Card> = vec![];
+        let choice = DecisionEngine::select_for_overlord(&cards, &state);
+        assert!(choice.is_none());
+    }
+
+    #[test]
+    fn test_select_for_overlord_priority_1_spider_man_with_bringer_in_graveyard() {
+        let db = CardDatabase::from_file("cards.json").expect("Failed to load cards");
+        let spider_man = db
+            .get_card("Superior Spider-Man")
+            .expect("Superior Spider-Man should exist");
+        let bringer = db
+            .get_card("Bringer of the Last Gift")
+            .expect("Bringer should exist");
+        let kiora = db
+            .get_card("Kiora, the Rising Tide")
+            .expect("Kiora should exist");
+
+        let mut state = GameState::new();
+        // Add Bringer to graveyard
+        state.graveyard.add_card(bringer.clone());
+
+        let cards = vec![kiora.clone(), spider_man.clone()];
+        let choice = DecisionEngine::select_for_overlord(&cards, &state);
+
+        // Should choose Spider-Man (Priority 1)
+        assert_eq!(choice.map(|c| c.name()), Some("Superior Spider-Man"));
+    }
+
+    #[test]
+    fn test_select_for_overlord_priority_1_skip_if_spider_man_in_hand() {
+        let db = CardDatabase::from_file("cards.json").expect("Failed to load cards");
+        let spider_man = db
+            .get_card("Superior Spider-Man")
+            .expect("Superior Spider-Man should exist");
+        let bringer = db
+            .get_card("Bringer of the Last Gift")
+            .expect("Bringer should exist");
+        let kiora = db
+            .get_card("Kiora, the Rising Tide")
+            .expect("Kiora should exist");
+
+        let mut state = GameState::new();
+        // Add Bringer to graveyard AND hand (stuck in hand)
+        state.graveyard.add_card(bringer.clone());
+        state.hand.add_card(bringer.clone());
+        // Add Spider-Man to hand
+        state.hand.add_card(spider_man.clone());
+
+        let cards = vec![kiora.clone(), spider_man.clone()];
+        let choice = DecisionEngine::select_for_overlord(&cards, &state);
+
+        // Should NOT choose Spider-Man (already in hand), should choose Kiora (Priority 2)
+        assert_eq!(choice.map(|c| c.name()), Some("Kiora, the Rising Tide"));
+    }
+
+    #[test]
+    fn test_select_for_overlord_priority_2_kiora_if_bringer_in_hand() {
+        let db = CardDatabase::from_file("cards.json").expect("Failed to load cards");
+        let kiora = db
+            .get_card("Kiora, the Rising Tide")
+            .expect("Kiora should exist");
+        let bringer = db
+            .get_card("Bringer of the Last Gift")
+            .expect("Bringer should exist");
+        let town_greeter = db
+            .get_card("Town Greeter")
+            .expect("Town Greeter should exist");
+
+        let mut state = GameState::new();
+        // Add Bringer to hand (stuck there)
+        state.hand.add_card(bringer.clone());
+
+        let cards = vec![town_greeter.clone(), kiora.clone()];
+        let choice = DecisionEngine::select_for_overlord(&cards, &state);
+
+        // Should choose Kiora (Priority 2) to discard Bringer
+        assert_eq!(choice.map(|c| c.name()), Some("Kiora, the Rising Tide"));
+    }
+
+    #[test]
+    fn test_select_for_overlord_priority_3_town_greeter_early_game() {
+        let db = CardDatabase::from_file("cards.json").expect("Failed to load cards");
+        let town_greeter = db
+            .get_card("Town Greeter")
+            .expect("Town Greeter should exist");
+        let forest = db.get_card("Forest").expect("Forest should exist");
+
+        let mut state = GameState::new();
+        // Add only 2 lands to battlefield (early game)
+        let land1 = Card::Land(crate::card::LandCard {
+            base: crate::card::BaseCard {
+                name: "Forest".to_string(),
+                mana_cost: Default::default(),
+                mana_value: 0,
+            },
+            subtype: crate::card::LandSubtype::Basic,
+            enters_tapped: false,
+            colors: vec![crate::card::ManaColor::Green],
+            has_surveil: false,
+            surveil_amount: 0,
+        });
+        for _ in 0..2 {
+            let perm = crate::game::zones::Permanent::new(land1.clone(), 0);
+            state.battlefield.add_permanent(perm);
+        }
+
+        let cards = vec![forest.clone(), town_greeter.clone()];
+        let choice = DecisionEngine::select_for_overlord(&cards, &state);
+
+        // Should choose Town Greeter (Priority 3) because < 4 lands
+        assert_eq!(choice.map(|c| c.name()), Some("Town Greeter"));
+    }
+
+    #[test]
+    fn test_select_for_overlord_returns_none_late_game() {
+        let db = CardDatabase::from_file("cards.json").expect("Failed to load cards");
+        let town_greeter = db
+            .get_card("Town Greeter")
+            .expect("Town Greeter should exist");
+        let forest = db.get_card("Forest").expect("Forest should exist");
+
+        let mut state = GameState::new();
+        // Add 4+ lands to battlefield (late game)
+        let land1 = Card::Land(crate::card::LandCard {
+            base: crate::card::BaseCard {
+                name: "Forest".to_string(),
+                mana_cost: Default::default(),
+                mana_value: 0,
+            },
+            subtype: crate::card::LandSubtype::Basic,
+            enters_tapped: false,
+            colors: vec![crate::card::ManaColor::Green],
+            has_surveil: false,
+            surveil_amount: 0,
+        });
+        for _ in 0..4 {
+            let perm = crate::game::zones::Permanent::new(land1.clone(), 0);
+            state.battlefield.add_permanent(perm);
+        }
+
+        let cards = vec![forest.clone(), town_greeter.clone()];
+        let choice = DecisionEngine::select_for_overlord(&cards, &state);
+
+        // Should return None - late game, don't return anything
+        assert!(choice.is_none());
+    }
+
+    #[test]
+    fn test_select_for_overlord_no_priority_match() {
+        let db = CardDatabase::from_file("cards.json").expect("Failed to load cards");
+        let forest = db.get_card("Forest").expect("Forest should exist");
+        let island = db.get_card("Island").expect("Island should exist");
+
+        let mut state = GameState::new();
+        // Add 4+ lands to battlefield (late game)
+        let land1 = Card::Land(crate::card::LandCard {
+            base: crate::card::BaseCard {
+                name: "Forest".to_string(),
+                mana_cost: Default::default(),
+                mana_value: 0,
+            },
+            subtype: crate::card::LandSubtype::Basic,
+            enters_tapped: false,
+            colors: vec![crate::card::ManaColor::Green],
+            has_surveil: false,
+            surveil_amount: 0,
+        });
+        for _ in 0..4 {
+            let perm = crate::game::zones::Permanent::new(land1.clone(), 0);
+            state.battlefield.add_permanent(perm);
+        }
+
+        let cards = vec![forest.clone(), island.clone()];
+        let choice = DecisionEngine::select_for_overlord(&cards, &state);
+
+        // Should return None - no priority match
+        assert!(choice.is_none());
     }
 }
 
