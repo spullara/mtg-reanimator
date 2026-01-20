@@ -2,6 +2,7 @@ use crate::card::{Card, CardDatabase};
 use crate::game::state::GameState;
 use crate::game::turns::{start_turn, draw_phase, upkeep_phase, end_phase};
 use crate::game::cards;
+use crate::game::mana;
 use crate::simulation::decisions::DecisionEngine;
 use crate::rng::GameRng;
 use crate::simulation::mulligan::resolve_mulligans;
@@ -236,7 +237,7 @@ pub fn main_phase(state: &mut GameState, db: &CardDatabase, verbose: bool) {
     let kiora_in_hand = state.hand.cards().iter().find(|c| c.name() == "Kiora, the Rising Tide");
     let should_prioritize_kiora = has_bringer_or_terror_in_hand
         && kiora_in_hand.is_some()
-        && cards::can_cast(kiora_in_hand.unwrap(), &state.mana_pool);
+        && mana::can_cast_spell(kiora_in_hand.unwrap(), state);
 
     if !state.land_played_this_turn && !should_prioritize_kiora {
         let mut cast_any = true;
@@ -244,12 +245,11 @@ pub fn main_phase(state: &mut GameState, db: &CardDatabase, verbose: bool) {
         while cast_any && !state.land_played_this_turn {
             cast_any = false;
 
-            // Land-finding spells
+            // Land-finding spells (from TypeScript LAND_FINDING_SPELLS)
             let land_finders = vec![
                 "Cache Grab",
                 "Dredger's Insight",
-                "Stitcher's Supplier",
-                "Teachings of the Kirin",
+                "Town Greeter",
             ];
 
             // Find castable land-finding spells
@@ -257,7 +257,7 @@ pub fn main_phase(state: &mut GameState, db: &CardDatabase, verbose: bool) {
                 .iter()
                 .enumerate()
                 .filter(|(_, c)| {
-                    land_finders.contains(&c.name()) && cards::can_cast(c, &state.mana_pool)
+                    land_finders.contains(&c.name()) && mana::can_cast_spell(c, state)
                 })
                 .collect();
 
@@ -304,6 +304,14 @@ pub fn main_phase(state: &mut GameState, db: &CardDatabase, verbose: bool) {
                 if let Some(card) = state.hand.remove_card(land_idx) {
                     let card_name = card.name().to_string();
                     let _ = cards::play_land(state, &card);
+
+                    // If the land enters untapped, tap it for mana
+                    if let Some(last_perm) = state.battlefield.permanents_mut().last_mut() {
+                        if !last_perm.tapped {
+                            let _ = cards::tap_land_for_mana(last_perm, &mut state.mana_pool);
+                        }
+                    }
+
                     if verbose {
                         let last_perm = state.battlefield.permanents().last();
                         let tapped_str = if let Some(perm) = last_perm {
@@ -353,7 +361,7 @@ pub fn main_phase(state: &mut GameState, db: &CardDatabase, verbose: bool) {
                 if matches!(c, Card::Land(_)) {
                     return false;
                 }
-                if !cards::can_cast(c, &state.mana_pool) {
+                if !mana::can_cast_spell(c, state) {
                     return false;
                 }
 

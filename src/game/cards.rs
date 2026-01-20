@@ -34,6 +34,32 @@ pub fn can_cast(card: &Card, mana_pool: &ManaPool) -> bool {
     mana_pool.can_pay(cost)
 }
 
+/// Check if a card can be cast by looking at untapped lands (not mana pool)
+/// This is used during mainPhase before lands are tapped
+pub fn can_cast_with_untapped_lands(card: &Card, state: &GameState) -> bool {
+    if matches!(card, Card::Land(_)) {
+        return true; // Lands don't require mana
+    }
+
+    match card {
+        Card::Creature(c) => {
+            // For creatures with impending, check if we can cast for impending cost
+            if let Some(impending_cost) = &c.impending_cost {
+                if can_afford_cost(impending_cost, state, Some(c)) {
+                    return true;
+                }
+            }
+            // Check regular mana cost
+            can_afford_cost(&c.base.mana_cost, state, Some(c))
+        }
+        Card::Instant(c) => can_afford_cost(&c.base.mana_cost, state, None),
+        Card::Sorcery(c) => can_afford_cost(&c.base.mana_cost, state, None),
+        Card::Enchantment(c) => can_afford_cost(&c.base.mana_cost, state, None),
+        Card::Saga(c) => can_afford_cost(&c.base.mana_cost, state, None),
+        Card::Land(_) => unreachable!(),
+    }
+}
+
 /// Play a land from hand to battlefield with proper tapping logic
 pub fn play_land(state: &mut GameState, card: &Card) -> Result<(), String> {
     let land = match card {
@@ -421,6 +447,10 @@ pub fn cast_spell(
             Ok(())
         }
         Card::Enchantment(spell) => {
+            // Add enchantment to battlefield
+            let permanent = Permanent::new(card.clone(), state.turn);
+            state.battlefield.add_permanent(permanent);
+
             // Process enchantment abilities
             for ability in &spell.abilities {
                 match ability.as_str() {
