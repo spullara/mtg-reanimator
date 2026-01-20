@@ -697,8 +697,9 @@ pub fn process_etb_triggers_verbose(
             }
             "mind_swap_copy" => {
                 // Superior Spider-Man: copy creature from graveyard
-                // EXACT LOGIC FROM TYPESCRIPT resolveSpiderManETB:
-                // Priority: Copy Bringer if in graveyard (THE COMBO!)
+                // Priority 1: Copy Bringer if in graveyard (THE COMBO!)
+                // Priority 2: If no Bringer but have another Spider-Man in hand,
+                //             copy a mill creature to dig for Bringer
 
                 let bringer_idx = state.graveyard.cards().iter()
                     .position(|c| c.name() == "Bringer of the Last Gift");
@@ -718,10 +719,59 @@ pub fn process_etb_triggers_verbose(
 
                     // Now trigger Bringer's ETB (mass reanimate!)
                     resolve_bringer_etb(state, verbose);
-                } else if verbose {
-                    println!("    Spider-Man enters as a 4/4 (no good copy target)");
+                } else {
+                    // No Bringer in graveyard - check if we have another Spider-Man in hand
+                    let spider_man_in_hand = state.hand.cards().iter()
+                        .filter(|c| c.name() == "Superior Spider-Man")
+                        .count();
+
+                    if spider_man_in_hand >= 1 {
+                        // We have another Spider-Man - copy a mill creature to dig for Bringer
+                        // Priority: Overlord of the Balemurk > Kiora > Town Greeter
+                        let mill_creature = state.graveyard.cards().iter()
+                            .position(|c| c.name() == "Overlord of the Balemurk")
+                            .or_else(|| state.graveyard.cards().iter()
+                                .position(|c| c.name() == "Kiora, the Rising Tide"))
+                            .or_else(|| state.graveyard.cards().iter()
+                                .position(|c| c.name() == "Town Greeter"));
+
+                        if let Some(idx) = mill_creature {
+                            let creature_name = state.graveyard.cards()[idx].name().to_string();
+                            if verbose {
+                                println!("    Spider-Man copies {} to dig for Bringer (have another Spider-Man in hand)", creature_name);
+                            }
+
+                            // Copy the mill creature
+                            permanent.is_copy_of = Some(creature_name.clone());
+
+                            // Exile the copied card
+                            if let Some(creature) = state.graveyard.remove_card(idx) {
+                                state.exile.add_card(creature);
+                            }
+
+                            // Trigger the copied creature's ETB
+                            match creature_name.as_str() {
+                                "Overlord of the Balemurk" => {
+                                    // Mill 4, return a permanent
+                                    resolve_overlord_etb(state, verbose);
+                                }
+                                "Kiora, the Rising Tide" => {
+                                    // Draw 2, discard 2
+                                    resolve_kiora_etb(state, verbose);
+                                }
+                                "Town Greeter" => {
+                                    // Mill 4, return a land
+                                    resolve_town_greeter_etb(state, verbose);
+                                }
+                                _ => {}
+                            }
+                        } else if verbose {
+                            println!("    Spider-Man enters as a 4/4 (no good copy target, but have another Spider-Man)");
+                        }
+                    } else if verbose {
+                        println!("    Spider-Man enters as a 4/4 (no good copy target)");
+                    }
                 }
-                // If no good target, Spider-Man just enters as a 4/4
             }
             _ => {} // Other abilities handled elsewhere
         }
@@ -943,6 +993,141 @@ pub fn resolve_surveil(state: &mut GameState, count: usize, verbose: bool) {
         }
         if !to_top.is_empty() {
             println!("    Surveil -> kept on top: {}", to_top.join(", "));
+        }
+    }
+}
+
+/// Resolve Overlord of the Balemurk ETB ability: mill 4, may return a permanent
+/// Called when Spider-Man copies Overlord to dig for Bringer
+pub fn resolve_overlord_etb(state: &mut GameState, verbose: bool) {
+    let milled = state.library.mill(4);
+
+    if verbose {
+        let mill_names: Vec<String> = milled.iter().map(|c| c.name().to_string()).collect();
+        println!("    Mill 4: {}", mill_names.join(", "));
+    }
+
+    // Check game state for selection logic
+    let has_bringer_in_gy = state.graveyard.cards().iter()
+        .any(|c| c.name() == "Bringer of the Last Gift");
+    let has_spider_in_hand = state.hand.cards().iter()
+        .any(|c| c.name() == "Superior Spider-Man");
+    let has_bringer_in_hand = state.hand.cards().iter()
+        .any(|c| c.name() == "Bringer of the Last Gift");
+    let land_count = state.battlefield.permanents().iter()
+        .filter(|p| matches!(p.card, Card::Land(_)))
+        .count();
+
+    let mut selected_idx: Option<usize> = None;
+
+    // Priority 1: Spider-Man if we need it for the combo
+    if has_bringer_in_gy && !has_spider_in_hand {
+        for (idx, card) in milled.iter().enumerate() {
+            if card.name() == "Superior Spider-Man" {
+                selected_idx = Some(idx);
+                if verbose {
+                    println!("    Overlord returns Superior Spider-Man (combo piece!)");
+                }
+                break;
+            }
+        }
+    }
+
+    // Priority 2: Kiora if Bringer is stuck in hand
+    if selected_idx.is_none() && has_bringer_in_hand {
+        for (idx, card) in milled.iter().enumerate() {
+            if card.name() == "Kiora, the Rising Tide" {
+                selected_idx = Some(idx);
+                if verbose {
+                    println!("    Overlord returns Kiora (need to discard Bringer from hand)");
+                }
+                break;
+            }
+        }
+    }
+
+    // Priority 3: Town Greeter if early game
+    if selected_idx.is_none() && land_count < 4 {
+        for (idx, card) in milled.iter().enumerate() {
+            if card.name() == "Town Greeter" {
+                selected_idx = Some(idx);
+                if verbose {
+                    println!("    Overlord returns Town Greeter (cheap enabler)");
+                }
+                break;
+            }
+        }
+    }
+
+    // Otherwise: DON'T return anything! Leave creatures in graveyard for reanimation
+    if selected_idx.is_none() && verbose {
+        println!("    Overlord returns nothing (keeping creatures for reanimate)");
+    }
+
+    // Add cards to graveyard or hand
+    for (idx, card) in milled.into_iter().enumerate() {
+        if Some(idx) == selected_idx {
+            state.hand.add_card(card);
+        } else {
+            state.graveyard.add_card(card);
+        }
+    }
+}
+
+/// Resolve Town Greeter ETB ability: mill 4, may return a land
+/// Called when Spider-Man copies Town Greeter to dig for Bringer
+pub fn resolve_town_greeter_etb(state: &mut GameState, verbose: bool) {
+    let milled = state.library.mill(4);
+    let mut milled_cards = Vec::new();
+    for card in milled {
+        milled_cards.push(card);
+    }
+
+    if verbose {
+        let mill_names: Vec<String> = milled_cards.iter().map(|c| c.name().to_string()).collect();
+        println!("    Mill 4: {}", mill_names.join(", "));
+    }
+
+    // Find the best land to return
+    let mut best_land: Option<Card> = None;
+    let mut best_land_idx: Option<usize> = None;
+
+    for (idx, card) in milled_cards.iter().enumerate() {
+        if matches!(card, Card::Land(_)) {
+            // Prefer untapped lands, then multi-color lands
+            if let Some(ref current_best) = best_land {
+                let new_is_better = match (card, current_best) {
+                    (Card::Land(new_land), Card::Land(current_land)) => {
+                        let new_tapped = new_land.enters_tapped;
+                        let current_tapped = current_land.enters_tapped;
+                        if new_tapped != current_tapped {
+                            !new_tapped // Prefer untapped
+                        } else {
+                            new_land.colors.len() > current_land.colors.len() // Prefer multi-color
+                        }
+                    }
+                    _ => false,
+                };
+                if new_is_better {
+                    best_land = Some(card.clone());
+                    best_land_idx = Some(idx);
+                }
+            } else {
+                best_land = Some(card.clone());
+                best_land_idx = Some(idx);
+            }
+        }
+    }
+
+    // Return the best land to hand, rest to graveyard
+    for (idx, card) in milled_cards.into_iter().enumerate() {
+        if Some(idx) == best_land_idx {
+            if verbose {
+                println!("    -> Returned to hand: {}", card.name());
+            }
+            state.hand.add_card(card);
+        } else {
+            state.graveyard.add_card(card);
         }
     }
 }
