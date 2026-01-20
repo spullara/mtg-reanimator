@@ -874,21 +874,21 @@ pub fn advance_saga(state: &mut GameState, saga_name: &str) -> Result<(), String
                 }
                 3 => {
                     // Chapter 3: Discard a card, return creature or land from graveyard
-                    if state.hand.size() > 0 {
-                        state.hand.remove_card(0);
+                    // Use smart discard: Bringer/Terror WANT to be in graveyard!
+                    use crate::simulation::decisions::DecisionEngine;
+
+                    if let Some(discard_idx) = DecisionEngine::choose_awaken_discard(state.hand.cards()) {
+                        if let Some(discarded) = state.hand.remove_card(discard_idx) {
+                            state.graveyard.add_card(discarded);
+                        }
                     }
-                    // Return first creature or land from graveyard
-                    if let Some(card) = state.graveyard.find_creature() {
-                        if let Some(pos) = state
-                            .graveyard
-                            .cards()
-                            .iter()
-                            .position(|c| c.name() == card.name())
-                        {
-                            if let Some(returned) = state.graveyard.remove_card(pos) {
-                                let perm = Permanent::new(returned, state.turn);
-                                state.battlefield.add_permanent(perm);
-                            }
+
+                    // Return creature or land with smart priority:
+                    // Spider-Man > Kiora (if Bringer stuck) > Town Greeter > lands
+                    // NEVER return Bringer/Terror
+                    if let Some(return_idx) = DecisionEngine::choose_awaken_return(state.graveyard.cards(), state) {
+                        if let Some(returned) = state.graveyard.remove_card(return_idx) {
+                            state.hand.add_card(returned);
                         }
                     }
                 }

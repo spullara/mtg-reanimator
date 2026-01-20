@@ -706,6 +706,105 @@ impl DecisionEngine {
         None
     }
 
+    /// Choose which card to discard for Awaken the Honored Dead Chapter 3
+    /// Priority: Bringer/Terror (they want to be in graveyard!) > lands > expensive spells
+    pub fn choose_awaken_discard(hand: &[Card]) -> Option<usize> {
+        // Priority 1: Bringer or Terror - they WANT to be in graveyard!
+        for (idx, card) in hand.iter().enumerate() {
+            let name = card.name();
+            if name == "Bringer of the Last Gift" || name == "Terror of the Peaks" {
+                return Some(idx);
+            }
+        }
+
+        // Priority 2: Excess lands
+        for (idx, card) in hand.iter().enumerate() {
+            if matches!(card, Card::Land(_)) {
+                return Some(idx);
+            }
+        }
+
+        // Priority 3: Expensive spells we can't cast soon
+        for (idx, card) in hand.iter().enumerate() {
+            if card.mana_value() >= 4 {
+                return Some(idx);
+            }
+        }
+
+        // Priority 4: Any card
+        if !hand.is_empty() {
+            return Some(0);
+        }
+
+        None
+    }
+
+    /// Choose which creature/land to return from graveyard for Awaken the Honored Dead Chapter 3
+    /// Priority: Spider-Man > Kiora (if Bringer stuck in hand) > Town Greeter > lands
+    /// NEVER return Bringer or Terror - they need to stay in graveyard!
+    pub fn choose_awaken_return(graveyard: &[Card], state: &GameState) -> Option<usize> {
+        let has_spider_in_hand = state
+            .hand
+            .cards()
+            .iter()
+            .any(|c| c.name() == "Superior Spider-Man");
+        let has_bringer_in_hand = state
+            .hand
+            .cards()
+            .iter()
+            .any(|c| c.name() == "Bringer of the Last Gift");
+        let has_terror_in_hand = state
+            .hand
+            .cards()
+            .iter()
+            .any(|c| c.name() == "Terror of the Peaks");
+
+        // Priority 1: Spider-Man if we don't have one
+        if !has_spider_in_hand {
+            for (idx, card) in graveyard.iter().enumerate() {
+                if card.name() == "Superior Spider-Man" {
+                    return Some(idx);
+                }
+            }
+        }
+
+        // Priority 2: Kiora if Bringer/Terror stuck in hand (need to discard them)
+        if has_bringer_in_hand || has_terror_in_hand {
+            for (idx, card) in graveyard.iter().enumerate() {
+                if card.name() == "Kiora, the Rising Tide" {
+                    return Some(idx);
+                }
+            }
+        }
+
+        // Priority 3: Town Greeter (cheap mill enabler)
+        for (idx, card) in graveyard.iter().enumerate() {
+            if card.name() == "Town Greeter" {
+                return Some(idx);
+            }
+        }
+
+        // Priority 4: Any land (mana development)
+        for (idx, card) in graveyard.iter().enumerate() {
+            if matches!(card, Card::Land(_)) {
+                return Some(idx);
+            }
+        }
+
+        // Priority 5: Any creature EXCEPT Bringer/Terror
+        for (idx, card) in graveyard.iter().enumerate() {
+            if matches!(card, Card::Creature(_))
+                && card.name() != "Bringer of the Last Gift"
+                && card.name() != "Terror of the Peaks"
+            {
+                return Some(idx);
+            }
+        }
+
+        // Don't return anything - Bringer/Terror need to stay in graveyard
+        None
+    }
+
     /// Check if the combo is ready to win
     /// Combo: Spider-Man + Bringer in graveyard + 4+ mana available
     pub fn is_combo_ready(state: &GameState) -> bool {

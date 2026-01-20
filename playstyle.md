@@ -130,12 +130,25 @@ This document describes the strategic use of each card in the Sultai Reanimator 
 ---
 
 ### Awaken the Honored Dead (3 mana - 1U1B1G) - Saga
-**Role:** Multi-purpose utility
+**Role:** Multi-purpose utility with smart graveyard manipulation
 
 **Chapters:**
 1. Destroy target nonland permanent (removal)
 2. Mill 3 cards
 3. Discard a card, return creature or land from graveyard
+
+**Chapter 3 Discard Priority:**
+1. ✅ Bringer of the Last Gift (wants to be in graveyard!)
+2. ✅ Terror of the Peaks (wants to be in graveyard!)
+3. ✅ Excess lands
+4. ✅ Expensive spells
+
+**Chapter 3 Return Priority:**
+1. Superior Spider-Man (if not in hand)
+2. Kiora (if Bringer/Terror stuck in hand - need to discard them)
+3. Town Greeter (cheap mill enabler)
+4. Any land (mana development)
+5. ❌ Never return Bringer or Terror
 
 **When to cast:** Lower priority than Cache Grab/Dredger's - costs 3 colors
 
