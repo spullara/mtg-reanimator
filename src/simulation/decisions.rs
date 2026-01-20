@@ -32,37 +32,109 @@ impl DecisionEngine {
         lands < 2 || !has_early_spell
     }
 
-    /// Choose which card to play from hand
-    /// Priority: mill enablers > creatures > lands
+    /// Choose which card to play from hand - matches TypeScript's sophisticated logic
+    /// Priority:
+    /// 1. Spider-Man if combo is lethal
+    /// 2. Kiora if Bringer/Terror in hand (to discard them)
+    /// 3. Mill spells (Cache Grab, Dredger's Insight, Town Greeter, Overlord)
+    /// 4. Awaken the Honored Dead (saga that mills)
+    /// 5. Other spells by mana cost
     pub fn choose_card_to_play(
         hand: &[Card],
         state: &GameState,
         _db: &CardDatabase,
     ) -> Option<usize> {
-        // First, try to play a mill enabler
-        for (idx, card) in hand.iter().enumerate() {
-            if Self::is_mill_enabler(card) && Self::can_cast(card, &state.mana_pool) {
-                return Some(idx);
-            }
-        }
-
-        // Then, try to play a creature
-        for (idx, card) in hand.iter().enumerate() {
-            if matches!(card, Card::Creature(_)) && Self::can_cast(card, &state.mana_pool) {
-                return Some(idx);
-            }
-        }
-
-        // Finally, try to play a land if we haven't played one this turn
-        if !state.land_played_this_turn {
-            for (idx, card) in hand.iter().enumerate() {
+        // Filter castable spells
+        let mut castable: Vec<(usize, &Card)> = hand
+            .iter()
+            .enumerate()
+            .filter(|(_, card)| {
                 if matches!(card, Card::Land(_)) {
-                    return Some(idx);
+                    return false;
+                }
+                if !Self::can_cast(card, &state.mana_pool) {
+                    return false;
+                }
+
+                // Only cast Spider-Man if combo would be lethal
+                if card.name() == "Superior Spider-Man" {
+                    let has_bringer_in_gy = state.graveyard.cards().iter().any(|c| c.name() == "Bringer of the Last Gift");
+                    if !has_bringer_in_gy {
+                        return false;
+                    }
+                    // Check if combo is lethal (simplified: if we have enough creatures)
+                    let creature_count = state.battlefield.permanents().iter()
+                        .filter(|p| matches!(p.card, Card::Creature(_)))
+                        .count();
+                    if creature_count < 2 {
+                        return false; // Not enough creatures for lethal
+                    }
+                }
+
+                true
+            })
+            .collect();
+
+        if castable.is_empty() {
+            return None;
+        }
+
+        // Check game state for priorities
+        let has_bringer_in_gy = state.graveyard.cards().iter().any(|c| c.name() == "Bringer of the Last Gift");
+        let has_bringer_in_hand = hand.iter().any(|c| c.name() == "Bringer of the Last Gift");
+        let has_terror_in_hand = hand.iter().any(|c| c.name() == "Terror of the Peaks");
+        let has_spider_in_hand = hand.iter().any(|c| c.name() == "Superior Spider-Man");
+        let combo_is_lethal = has_bringer_in_gy && has_spider_in_hand && state.opponent_life <= 20; // Simplified check
+
+        // Sort by priority
+        castable.sort_by(|a, b| {
+            let a_name = a.1.name();
+            let b_name = b.1.name();
+
+            // Priority 1: Spider-Man if combo is lethal
+            if combo_is_lethal {
+                if a_name == "Superior Spider-Man" {
+                    return std::cmp::Ordering::Less;
+                }
+                if b_name == "Superior Spider-Man" {
+                    return std::cmp::Ordering::Greater;
                 }
             }
-        }
 
-        None
+            // Priority 2: Kiora if Bringer or Terror in hand
+            if has_bringer_in_hand || has_terror_in_hand {
+                if a_name == "Kiora, the Rising Tide" {
+                    return std::cmp::Ordering::Less;
+                }
+                if b_name == "Kiora, the Rising Tide" {
+                    return std::cmp::Ordering::Greater;
+                }
+            }
+
+            // Priority 3: Mill spells
+            let mill_spells = ["Cache Grab", "Dredger's Insight", "Town Greeter", "Overlord of the Balemurk"];
+            let a_is_mill = mill_spells.contains(&a_name);
+            let b_is_mill = mill_spells.contains(&b_name);
+            if a_is_mill && !b_is_mill {
+                return std::cmp::Ordering::Less;
+            }
+            if b_is_mill && !a_is_mill {
+                return std::cmp::Ordering::Greater;
+            }
+
+            // Priority 4: Awaken the Honored Dead
+            if a_name == "Awaken the Honored Dead" && !b_is_mill {
+                return std::cmp::Ordering::Less;
+            }
+            if b_name == "Awaken the Honored Dead" && !a_is_mill {
+                return std::cmp::Ordering::Greater;
+            }
+
+            // Priority 5: Cheaper spells
+            a.1.mana_value().cmp(&b.1.mana_value())
+        });
+
+        castable.first().map(|(idx, _)| *idx)
     }
 
     /// Choose which land to play - matches TypeScript's sophisticated logic
