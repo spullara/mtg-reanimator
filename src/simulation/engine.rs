@@ -192,30 +192,303 @@ fn get_mana_cost(card: &Card) -> &crate::card::ManaCost {
     }
 }
 
-/// Execute main phase: play lands and cast spells
-fn execute_main_phase(state: &mut GameState, db: &CardDatabase, verbose: bool) {
-    // Step 1: Play one land if we haven't already (play BEFORE tapping for mana!)
-    if !state.land_played_this_turn {
+/// Port of TypeScript mainPhase function (lines 2211-2502)
+/// Core game logic that determines what spells to cast and in what order
+pub fn main_phase(state: &mut GameState, db: &CardDatabase, verbose: bool) {
+    // SPECIAL CASE: Turn 4 combo check
+    // If we have Spider-Man in hand, Bringer in GY, and can get to 4 mana by playing a land,
+    // play the land FIRST before casting any other spells!
+    let has_spider_man = state.hand.cards().iter().any(|c| c.name() == "Superior Spider-Man");
+    let has_bringer_in_gy = state.graveyard.cards().iter().any(|c| c.name() == "Bringer of the Last Gift");
+    let current_mana = state.battlefield.permanents()
+        .iter()
+        .filter(|p| matches!(p.card, Card::Land(_)) && !p.tapped)
+        .count() as u32;
+
+    if has_spider_man && has_bringer_in_gy && current_mana == 3 && !state.land_played_this_turn {
+        // Check if we have an untapped land to play
         let hand_cards = state.hand.cards().to_vec();
-        if let Some(land_idx) = DecisionEngine::choose_land_to_play(&hand_cards, state) {
-            if let Some(card) = state.hand.remove_card(land_idx) {
-                let card_name = card.name().to_string();
-                let _ = cards::play_land(state, &card);
+        if let Some(untapped_land_idx) = hand_cards.iter().position(|c| {
+            if let Card::Land(land) = c {
+                // Check if land enters untapped
+                !land.enters_tapped && land.subtype != crate::card::LandSubtype::Fastland
+            } else {
+                false
+            }
+        }) {
+            if let Some(untapped_land) = state.hand.remove_card(untapped_land_idx) {
+                let land_name = untapped_land.name().to_string();
+                let _ = cards::play_land(state, &untapped_land);
                 if verbose {
-                    // Check if land entered tapped
-                    let last_perm = state.battlefield.permanents().last();
-                    let tapped_str = if let Some(perm) = last_perm {
-                        if perm.tapped { " (tapped)" } else { "" }
-                    } else {
-                        ""
-                    };
-                    println!("  [Land] {}{}", card_name, tapped_str);
+                    println!("  [COMBO SETUP] Played {} first to enable turn 4 combo", land_name);
                 }
             }
         }
     }
 
-    // Step 2: Tap all untapped lands for mana (including newly played land)
+    // STEP 1: If we haven't played a land yet and have land-finding spells,
+    // cast those FIRST to potentially find a better land
+    // BUT: If we have Bringer/Terror in hand and can cast Kiora, skip this step!
+    // Kiora is more important (discards Bringer to graveyard for the combo)
+    let has_bringer_or_terror_in_hand = state.hand.cards().iter().any(|c| {
+        c.name() == "Bringer of the Last Gift" || c.name() == "Terror of the Peaks"
+    });
+    let kiora_in_hand = state.hand.cards().iter().find(|c| c.name() == "Kiora, the Rising Tide");
+    let should_prioritize_kiora = has_bringer_or_terror_in_hand
+        && kiora_in_hand.is_some()
+        && cards::can_cast(kiora_in_hand.unwrap(), &state.mana_pool);
+
+    if !state.land_played_this_turn && !should_prioritize_kiora {
+        let mut cast_any = true;
+
+        while cast_any && !state.land_played_this_turn {
+            cast_any = false;
+
+            // Land-finding spells
+            let land_finders = vec![
+                "Cache Grab",
+                "Dredger's Insight",
+                "Stitcher's Supplier",
+                "Teachings of the Kirin",
+            ];
+
+            // Find castable land-finding spells
+            let mut castable_finders: Vec<(usize, &Card)> = state.hand.cards()
+                .iter()
+                .enumerate()
+                .filter(|(_, c)| {
+                    land_finders.contains(&c.name()) && cards::can_cast(c, &state.mana_pool)
+                })
+                .collect();
+
+            if !castable_finders.is_empty() {
+                // Sort by mana value (cheaper first)
+                castable_finders.sort_by_key(|(_, c)| c.mana_value());
+
+                let (spell_idx, spell) = castable_finders[0];
+                let lands_before = state.hand.cards().iter().filter(|c| matches!(c, Card::Land(_))).count();
+
+                // Remove from hand and cast
+                if let Some(card) = state.hand.remove_card(spell_idx) {
+                    let cost = get_mana_cost(&card);
+                    if state.mana_pool.pay(cost) {
+                        let _ = cards::cast_spell(state, &card, db);
+                        cast_any = true;
+
+                        // Check if we found a land
+                        let lands_after = state.hand.cards().iter().filter(|c| matches!(c, Card::Land(_))).count();
+                        if lands_after > lands_before && verbose {
+                            println!("  [Land-finder] Found a land");
+                        }
+                    } else {
+                        // Put it back if we can't pay
+                        state.hand.add_card(card);
+                    }
+                }
+            } else {
+                break; // No more land-finding spells
+            }
+        }
+    }
+
+    // STEP 2: Now play a land (possibly one we just found from milling)
+    if !state.land_played_this_turn {
+        let hand_cards = state.hand.cards().to_vec();
+        let lands_in_hand: Vec<&Card> = hand_cards.iter()
+            .filter(|c| matches!(c, Card::Land(_)))
+            .collect();
+
+        if !lands_in_hand.is_empty() {
+            // Use DecisionEngine to choose the best land
+            if let Some(land_idx) = DecisionEngine::choose_land_to_play(&hand_cards, state) {
+                if let Some(card) = state.hand.remove_card(land_idx) {
+                    let card_name = card.name().to_string();
+                    let _ = cards::play_land(state, &card);
+                    if verbose {
+                        let last_perm = state.battlefield.permanents().last();
+                        let tapped_str = if let Some(perm) = last_perm {
+                            if perm.tapped { " (tapped)" } else { "" }
+                        } else {
+                            ""
+                        };
+                        println!("  [Land] {}{}", card_name, tapped_str);
+                    }
+                }
+            }
+        }
+    }
+
+    // STEP 3: Cast remaining spells
+    let mut cast_any = true;
+    while cast_any {
+        cast_any = false;
+
+        // Get game state for spell priorities
+        let has_bringer_in_graveyard = state.graveyard.cards().iter()
+            .any(|c| c.name() == "Bringer of the Last Gift");
+        let has_bringer_in_hand = state.hand.cards().iter()
+            .any(|c| c.name() == "Bringer of the Last Gift");
+        let has_terror_in_hand = state.hand.cards().iter()
+            .any(|c| c.name() == "Terror of the Peaks");
+
+        // Check if the combo would be lethal
+        let combo_is_lethal = has_bringer_in_graveyard && cards::is_combo_lethal(state);
+        let has_spider_man_in_hand = state.hand.cards().iter()
+            .any(|c| c.name() == "Superior Spider-Man");
+
+        // Log when we're holding back the combo
+        if verbose && has_bringer_in_graveyard && has_spider_man_in_hand && !combo_is_lethal {
+            let expected_damage = cards::calculate_combo_damage(state);
+            println!(
+                "  [Waiting] Combo not lethal yet (expected: {} damage, need: {})",
+                expected_damage, state.opponent_life
+            );
+        }
+
+        // Get castable spells
+        let mut castable_spells: Vec<(usize, &Card)> = state.hand.cards()
+            .iter()
+            .enumerate()
+            .filter(|(_, c)| {
+                if matches!(c, Card::Land(_)) {
+                    return false;
+                }
+                if !cards::can_cast(c, &state.mana_pool) {
+                    return false;
+                }
+
+                // Only cast Spider-Man if the combo would be LETHAL
+                if c.name() == "Superior Spider-Man" {
+                    if !has_bringer_in_graveyard {
+                        return false; // Need Bringer in graveyard
+                    }
+                    if !combo_is_lethal {
+                        return false; // Wait until it would kill
+                    }
+                }
+
+                true
+            })
+            .collect();
+
+        if castable_spells.is_empty() {
+            break;
+        }
+
+        // Sort by priority
+        castable_spells.sort_by(|a, b| {
+            let (_, a_card) = a;
+            let (_, b_card) = b;
+
+            // Priority 1: Spider-Man if combo is lethal
+            if combo_is_lethal {
+                if a_card.name() == "Superior Spider-Man" {
+                    return std::cmp::Ordering::Less;
+                }
+                if b_card.name() == "Superior Spider-Man" {
+                    return std::cmp::Ordering::Greater;
+                }
+            }
+
+            // Priority 2: Kiora if Bringer/Terror in hand
+            if has_bringer_in_hand {
+                if a_card.name() == "Kiora, the Rising Tide" {
+                    return std::cmp::Ordering::Less;
+                }
+                if b_card.name() == "Kiora, the Rising Tide" {
+                    return std::cmp::Ordering::Greater;
+                }
+            }
+
+            if has_terror_in_hand {
+                if a_card.name() == "Kiora, the Rising Tide" {
+                    return std::cmp::Ordering::Less;
+                }
+                if b_card.name() == "Kiora, the Rising Tide" {
+                    return std::cmp::Ordering::Greater;
+                }
+            }
+
+            // Priority 3: Mill spells
+            let mill_spells = vec![
+                "Cache Grab",
+                "Dredger's Insight",
+                "Town Greeter",
+                "Overlord of the Balemurk",
+            ];
+            let a_is_mill = mill_spells.contains(&a_card.name());
+            let b_is_mill = mill_spells.contains(&b_card.name());
+            if a_is_mill && !b_is_mill {
+                return std::cmp::Ordering::Less;
+            }
+            if b_is_mill && !a_is_mill {
+                return std::cmp::Ordering::Greater;
+            }
+
+            // Priority 4: Awaken the Honored Dead
+            if a_card.name() == "Awaken the Honored Dead" && !b_is_mill {
+                return std::cmp::Ordering::Less;
+            }
+            if b_card.name() == "Awaken the Honored Dead" && !a_is_mill {
+                return std::cmp::Ordering::Greater;
+            }
+
+            // Priority 5: Cheaper spells
+            a_card.mana_value().cmp(&b_card.mana_value())
+        });
+
+        if !castable_spells.is_empty() {
+            let (spell_idx, _spell) = castable_spells[0];
+
+            if let Some(card) = state.hand.remove_card(spell_idx) {
+                let cost = get_mana_cost(&card);
+                if state.mana_pool.pay(cost) {
+                    let card_name = card.name().to_string();
+
+                    match &card {
+                        Card::Creature(_) => {
+                            let _ = cards::cast_creature(state, &card, false);
+
+                            // Process ETB triggers
+                            let perm_idx = state.battlefield.permanents().len().saturating_sub(1);
+                            if perm_idx < state.battlefield.permanents().len() {
+                                let mut perm = state.battlefield.permanents_mut()[perm_idx].clone();
+                                let _ = cards::process_etb_triggers(state, &mut perm, db);
+                                state.battlefield.permanents_mut()[perm_idx] = perm;
+                            }
+
+                            if verbose {
+                                println!("  [Cast] {}", card_name);
+                            }
+                        }
+                        Card::Land(_) => {
+                            let _ = cards::play_land(state, &card);
+                            if verbose {
+                                println!("  [Land] {}", card_name);
+                            }
+                        }
+                        Card::Instant(_) | Card::Sorcery(_) | Card::Enchantment(_) | Card::Saga(_) => {
+                            let _ = cards::cast_spell(state, &card, db);
+                            if verbose {
+                                println!("  [Cast] {}", card_name);
+                            }
+                        }
+                    }
+
+                    cast_any = true;
+                } else {
+                    // Put it back if we can't pay
+                    state.hand.add_card(card);
+                }
+            }
+        }
+    }
+}
+
+/// Execute main phase: play lands and cast spells
+fn execute_main_phase(state: &mut GameState, db: &CardDatabase, verbose: bool) {
+    // BEFORE main phase, tap all untapped lands for mana
+    // This matches TypeScript behavior where lands are tapped before casting spells
     let mut lands_to_tap = Vec::new();
     for (idx, permanent) in state.battlefield.permanents().iter().enumerate() {
         if matches!(permanent.card, Card::Land(_)) && !permanent.tapped {
@@ -230,97 +503,8 @@ fn execute_main_phase(state: &mut GameState, db: &CardDatabase, verbose: bool) {
         }
     }
 
-    // Step 3: Check if combo is ready (Spider-Man + Bringer in graveyard + 4+ mana)
-    if DecisionEngine::is_combo_ready(state) {
-        // Cast Spider-Man to trigger the combo
-        let hand_cards = state.hand.cards().to_vec();
-        if let Some(spider_idx) = hand_cards.iter().position(|c| c.name() == "Superior Spider-Man") {
-            if let Some(card) = state.hand.remove_card(spider_idx) {
-                // Pay mana for Spider-Man
-                let cost = get_mana_cost(&card);
-                if state.mana_pool.pay(cost) {
-                    // Cast as creature
-                    let _ = cards::cast_creature(state, &card, false);
-
-                    // Process ETB triggers (this will copy Bringer and trigger mass reanimate)
-                    // We need to get the permanent index first to avoid double borrow
-                    let perm_idx = state.battlefield.permanents().len().saturating_sub(1);
-                    if perm_idx < state.battlefield.permanents().len() {
-                        let mut perm = state.battlefield.permanents_mut()[perm_idx].clone();
-                        let _ = cards::process_etb_triggers(state, &mut perm, db);
-                        state.battlefield.permanents_mut()[perm_idx] = perm;
-                    }
-                }
-            }
-        }
-        return; // Stop casting after combo
-    }
-
-    // Step 4: Cast spells from hand until we run out of mana or cards
-    loop {
-        let hand_cards = state.hand.cards().to_vec();
-
-        // Find the best card to play
-        if let Some(card_idx) = DecisionEngine::choose_card_to_play(&hand_cards, state, db) {
-            let card = hand_cards[card_idx].clone();
-
-            // Check if we can cast it
-            if !cards::can_cast(&card, &state.mana_pool) {
-                break; // Can't cast anything else
-            }
-
-            // Remove from hand
-            let _ = state.hand.remove_card(card_idx);
-
-            // Pay mana
-            let cost = get_mana_cost(&card);
-            if !state.mana_pool.pay(cost) {
-                // Put it back if we can't pay
-                state.hand.add_card(card);
-                break;
-            }
-
-            // Cast the card based on type
-            let card_name = card.name().to_string();
-            match &card {
-                Card::Creature(_) => {
-                    let _ = cards::cast_creature(state, &card, false);
-
-                    // Process ETB triggers
-                    let perm_idx = state.battlefield.permanents().len().saturating_sub(1);
-                    if perm_idx < state.battlefield.permanents().len() {
-                        let mut perm = state.battlefield.permanents_mut()[perm_idx].clone();
-                        let _ = cards::process_etb_triggers(state, &mut perm, db);
-                        state.battlefield.permanents_mut()[perm_idx] = perm;
-                    }
-
-                    if verbose {
-                        println!("  [Cast] {}", card_name);
-                    }
-                }
-                Card::Land(_) => {
-                    let _ = cards::play_land(state, &card);
-                    if verbose {
-                        println!("  [Land] {}", card_name);
-                    }
-                }
-                Card::Instant(_) | Card::Sorcery(_) | Card::Enchantment(_) => {
-                    let _ = cards::cast_spell(state, &card, db);
-                    if verbose {
-                        println!("  [Cast] {}", card_name);
-                    }
-                }
-                Card::Saga(_) => {
-                    let _ = cards::cast_spell(state, &card, db);
-                    if verbose {
-                        println!("  [Cast] {}", card_name);
-                    }
-                }
-            }
-        } else {
-            break; // No more cards to play
-        }
-    }
+    // Call the new main_phase function
+    main_phase(state, db, verbose);
 }
 
 /// Run a complete game simulation
