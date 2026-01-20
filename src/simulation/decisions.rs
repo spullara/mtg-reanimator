@@ -438,6 +438,112 @@ impl DecisionEngine {
             .collect()
     }
 
+    /// Select the best card from a milled set based on game state priorities
+    /// This is the exact port of TypeScript selectBestFromMill (lines 1226-1305)
+    ///
+    /// Priority:
+    /// 1. Superior Spider-Man - ALWAYS grab it (key combo piece), unless we already have one
+    /// 2. Kiora if Bringer is in hand (need to discard it)
+    /// 3. Lands ONLY if we're desperate (0-1 lands on battlefield and none in hand)
+    /// 4. Mill enablers (Town Greeter, Overlord, Kiora)
+    /// 5. Land if < 4 lands
+    /// 6. Any non-combo creature
+    /// 7. Any permanent except combo pieces (Bringer, Terror)
+    ///
+    /// NEVER returns Bringer or Terror - they must stay in graveyard for reanimation
+    pub fn select_best_from_mill<'a>(cards: &'a [Card], state: &GameState) -> Option<&'a Card> {
+        if cards.is_empty() {
+            return None;
+        }
+
+        // Calculate game state metrics
+        let _has_bringer_in_graveyard = state
+            .graveyard
+            .cards()
+            .iter()
+            .any(|c| c.name() == "Bringer of the Last Gift");
+        let has_spider_man_in_hand = state
+            .hand
+            .cards()
+            .iter()
+            .any(|c| c.name() == "Superior Spider-Man");
+        let has_bringer_in_hand = state
+            .hand
+            .cards()
+            .iter()
+            .any(|c| c.name() == "Bringer of the Last Gift");
+
+        let land_count = state
+            .battlefield
+            .permanents()
+            .iter()
+            .filter(|p| matches!(p.card, Card::Land(_)))
+            .count();
+
+        let lands_in_hand = state
+            .hand
+            .cards()
+            .iter()
+            .filter(|c| matches!(c, Card::Land(_)))
+            .count();
+
+        // Priority 1: Superior Spider-Man - ALWAYS grab it (key combo piece), unless we already have one
+        for card in cards {
+            if card.name() == "Superior Spider-Man" && !has_spider_man_in_hand {
+                return Some(card);
+            }
+        }
+
+        // Priority 2: Kiora if Bringer is stuck in hand
+        for card in cards {
+            if card.name() == "Kiora, the Rising Tide" && has_bringer_in_hand {
+                return Some(card);
+            }
+        }
+
+        // Priority 3: Only get land if we're desperate (very few lands and none in hand)
+        let desperate_for_land = land_count <= 1 && lands_in_hand == 0;
+        if desperate_for_land {
+            if let Some(land) = cards.iter().find(|c| matches!(c, Card::Land(_))) {
+                return Some(land);
+            }
+        }
+
+        // Priority 4: Otherwise, get mill enablers (creatures that help us mill more)
+        if let Some(enabler) = cards.iter().find(|c| {
+            matches!(c, Card::Creature(_))
+                && (c.name() == "Town Greeter"
+                    || c.name() == "Overlord of the Balemurk"
+                    || c.name() == "Kiora, the Rising Tide")
+        }) {
+            return Some(enabler);
+        }
+
+        // Priority 5: Get land if we need it (< 4 lands)
+        if land_count < 4 {
+            if let Some(land) = cards.iter().find(|c| matches!(c, Card::Land(_))) {
+                return Some(land);
+            }
+        }
+
+        // Priority 6: Get any non-combo creature (but NEVER return Bringer or Terror)
+        if let Some(creature) = cards.iter().find(|c| {
+            matches!(c, Card::Creature(_))
+                && c.name() != "Bringer of the Last Gift"
+                && c.name() != "Terror of the Peaks"
+        }) {
+            return Some(creature);
+        }
+
+        // Priority 7: Get any permanent EXCEPT combo pieces (Bringer, Terror)
+        // These should stay in the graveyard for reanimation
+        cards.iter().find(|c| {
+            !matches!(c, Card::Instant(_) | Card::Sorcery(_))
+                && c.name() != "Bringer of the Last Gift"
+                && c.name() != "Terror of the Peaks"
+        })
+    }
+
     /// Choose which card to return from mill
     /// Priority: Spider-Man > Kiora > lands (if desperate) > other creatures > nothing
     pub fn choose_mill_return(graveyard: &[Card], _card_type: CardType) -> Option<usize> {
@@ -689,6 +795,293 @@ mod tests {
 
         // Should choose land (index 1), never Bringer
         assert_eq!(choice, Some(1));
+    }
+
+    #[test]
+    fn test_select_best_from_mill_empty() {
+        let state = GameState::new();
+        let cards: Vec<Card> = vec![];
+        let choice = DecisionEngine::select_best_from_mill(&cards, &state);
+        assert!(choice.is_none());
+    }
+
+    #[test]
+    fn test_select_best_from_mill_priority_1_spider_man() {
+        let db = CardDatabase::from_file("cards.json").expect("Failed to load cards");
+        let spider_man = db
+            .get_card("Superior Spider-Man")
+            .expect("Superior Spider-Man should exist");
+        let kiora = db
+            .get_card("Kiora, the Rising Tide")
+            .expect("Kiora should exist");
+
+        let state = GameState::new();
+        let cards = vec![kiora.clone(), spider_man.clone()];
+
+        let choice = DecisionEngine::select_best_from_mill(&cards, &state);
+        // Should choose Spider-Man (Priority 1)
+        assert_eq!(choice.map(|c| c.name()), Some("Superior Spider-Man"));
+    }
+
+    #[test]
+    fn test_select_best_from_mill_priority_1_spider_man_already_in_hand() {
+        let db = CardDatabase::from_file("cards.json").expect("Failed to load cards");
+        let spider_man = db
+            .get_card("Superior Spider-Man")
+            .expect("Superior Spider-Man should exist");
+        let kiora = db
+            .get_card("Kiora, the Rising Tide")
+            .expect("Kiora should exist");
+
+        let mut state = GameState::new();
+        state.hand.add_card(spider_man.clone());
+
+        let cards = vec![kiora.clone(), spider_man.clone()];
+
+        let choice = DecisionEngine::select_best_from_mill(&cards, &state);
+        // Should choose Kiora since Spider-Man already in hand
+        assert_eq!(choice.map(|c| c.name()), Some("Kiora, the Rising Tide"));
+    }
+
+    #[test]
+    fn test_select_best_from_mill_priority_2_kiora_with_bringer_in_hand() {
+        let db = CardDatabase::from_file("cards.json").expect("Failed to load cards");
+        let kiora = db
+            .get_card("Kiora, the Rising Tide")
+            .expect("Kiora should exist");
+        let forest = db.get_card("Forest").expect("Forest should exist");
+        let bringer = db
+            .get_card("Bringer of the Last Gift")
+            .expect("Bringer should exist");
+
+        let state = GameState::new();
+        let mut state = state;
+        state.hand.add_card(bringer.clone());
+
+        let cards = vec![forest.clone(), kiora.clone()];
+
+        let choice = DecisionEngine::select_best_from_mill(&cards, &state);
+        // Should choose Kiora (Priority 2) because Bringer in hand
+        assert_eq!(choice.map(|c| c.name()), Some("Kiora, the Rising Tide"));
+    }
+
+    #[test]
+    fn test_select_best_from_mill_priority_3_desperate_for_land() {
+        let db = CardDatabase::from_file("cards.json").expect("Failed to load cards");
+        let forest = db.get_card("Forest").expect("Forest should exist");
+        let terror = db.get_card("Terror of the Peaks").expect("Terror should exist");
+
+        let state = GameState::new();
+        // 0 lands on battlefield, 0 lands in hand = desperate
+        let cards = vec![terror.clone(), forest.clone()];
+
+        let choice = DecisionEngine::select_best_from_mill(&cards, &state);
+        // Should choose land (Priority 3) because desperate
+        assert_eq!(choice.map(|c| c.name()), Some("Forest"));
+    }
+
+    #[test]
+    fn test_select_best_from_mill_priority_3_not_desperate() {
+        let db = CardDatabase::from_file("cards.json").expect("Failed to load cards");
+        let forest = db.get_card("Forest").expect("Forest should exist");
+        let town_greeter = db.get_card("Town Greeter").expect("Town Greeter should exist");
+
+        let mut state = GameState::new();
+        // Add 2 lands to battlefield (not desperate)
+        let land1 = Card::Land(crate::card::LandCard {
+            base: crate::card::BaseCard {
+                name: "Forest".to_string(),
+                mana_cost: Default::default(),
+                mana_value: 0,
+            },
+            subtype: crate::card::LandSubtype::Basic,
+            enters_tapped: false,
+            colors: vec![crate::card::ManaColor::Green],
+            has_surveil: false,
+            surveil_amount: 0,
+        });
+        let perm1 = crate::game::zones::Permanent::new(land1.clone(), 0);
+        state.battlefield.add_permanent(perm1);
+        let perm2 = crate::game::zones::Permanent::new(land1, 0);
+        state.battlefield.add_permanent(perm2);
+
+        let cards = vec![forest.clone(), town_greeter.clone()];
+
+        let choice = DecisionEngine::select_best_from_mill(&cards, &state);
+        // Should choose Town Greeter (Priority 4) not land
+        assert_eq!(choice.map(|c| c.name()), Some("Town Greeter"));
+    }
+
+    #[test]
+    fn test_select_best_from_mill_priority_4_mill_enablers() {
+        let db = CardDatabase::from_file("cards.json").expect("Failed to load cards");
+        let town_greeter = db.get_card("Town Greeter").expect("Town Greeter should exist");
+        let overlord = db
+            .get_card("Overlord of the Balemurk")
+            .expect("Overlord should exist");
+        let forest = db.get_card("Forest").expect("Forest should exist");
+
+        let state = GameState::new();
+        // Add 2 lands to battlefield (not desperate)
+        let mut state = state;
+        let land1 = Card::Land(crate::card::LandCard {
+            base: crate::card::BaseCard {
+                name: "Forest".to_string(),
+                mana_cost: Default::default(),
+                mana_value: 0,
+            },
+            subtype: crate::card::LandSubtype::Basic,
+            enters_tapped: false,
+            colors: vec![crate::card::ManaColor::Green],
+            has_surveil: false,
+            surveil_amount: 0,
+        });
+        let perm1 = crate::game::zones::Permanent::new(land1.clone(), 0);
+        state.battlefield.add_permanent(perm1);
+        let perm2 = crate::game::zones::Permanent::new(land1, 0);
+        state.battlefield.add_permanent(perm2);
+
+        let cards = vec![forest.clone(), town_greeter.clone(), overlord.clone()];
+
+        let choice = DecisionEngine::select_best_from_mill(&cards, &state);
+        // Should choose Town Greeter (Priority 4 - first enabler found)
+        assert_eq!(choice.map(|c| c.name()), Some("Town Greeter"));
+    }
+
+    #[test]
+    fn test_select_best_from_mill_priority_5_land_if_less_than_4() {
+        let db = CardDatabase::from_file("cards.json").expect("Failed to load cards");
+        let forest = db.get_card("Forest").expect("Forest should exist");
+        let terror = db.get_card("Terror of the Peaks").expect("Terror should exist");
+
+        let state = GameState::new();
+        let mut state = state;
+        // Add 3 lands to battlefield (< 4)
+        let land1 = Card::Land(crate::card::LandCard {
+            base: crate::card::BaseCard {
+                name: "Forest".to_string(),
+                mana_cost: Default::default(),
+                mana_value: 0,
+            },
+            subtype: crate::card::LandSubtype::Basic,
+            enters_tapped: false,
+            colors: vec![crate::card::ManaColor::Green],
+            has_surveil: false,
+            surveil_amount: 0,
+        });
+        for _ in 0..3 {
+            let perm = crate::game::zones::Permanent::new(land1.clone(), 0);
+            state.battlefield.add_permanent(perm);
+        }
+
+        let cards = vec![terror.clone(), forest.clone()];
+
+        let choice = DecisionEngine::select_best_from_mill(&cards, &state);
+        // Should choose land (Priority 5) because < 4 lands
+        assert_eq!(choice.map(|c| c.name()), Some("Forest"));
+    }
+
+    #[test]
+    fn test_select_best_from_mill_priority_6_non_combo_creature() {
+        let db = CardDatabase::from_file("cards.json").expect("Failed to load cards");
+        let town_greeter = db.get_card("Town Greeter").expect("Town Greeter should exist");
+        let bringer = db
+            .get_card("Bringer of the Last Gift")
+            .expect("Bringer should exist");
+
+        let state = GameState::new();
+        let mut state = state;
+        // Add 4+ lands to battlefield (not desperate, don't need more)
+        let land1 = Card::Land(crate::card::LandCard {
+            base: crate::card::BaseCard {
+                name: "Forest".to_string(),
+                mana_cost: Default::default(),
+                mana_value: 0,
+            },
+            subtype: crate::card::LandSubtype::Basic,
+            enters_tapped: false,
+            colors: vec![crate::card::ManaColor::Green],
+            has_surveil: false,
+            surveil_amount: 0,
+        });
+        for _ in 0..4 {
+            let perm = crate::game::zones::Permanent::new(land1.clone(), 0);
+            state.battlefield.add_permanent(perm);
+        }
+
+        let cards = vec![bringer.clone(), town_greeter.clone()];
+
+        let choice = DecisionEngine::select_best_from_mill(&cards, &state);
+        // Should choose Town Greeter (Priority 6) not Bringer
+        assert_eq!(choice.map(|c| c.name()), Some("Town Greeter"));
+    }
+
+    #[test]
+    fn test_select_best_from_mill_never_returns_bringer() {
+        let db = CardDatabase::from_file("cards.json").expect("Failed to load cards");
+        let bringer = db
+            .get_card("Bringer of the Last Gift")
+            .expect("Bringer should exist");
+        let terror = db.get_card("Terror of the Peaks").expect("Terror should exist");
+
+        let state = GameState::new();
+        let mut state = state;
+        // Add 4+ lands to battlefield
+        let land1 = Card::Land(crate::card::LandCard {
+            base: crate::card::BaseCard {
+                name: "Forest".to_string(),
+                mana_cost: Default::default(),
+                mana_value: 0,
+            },
+            subtype: crate::card::LandSubtype::Basic,
+            enters_tapped: false,
+            colors: vec![crate::card::ManaColor::Green],
+            has_surveil: false,
+            surveil_amount: 0,
+        });
+        for _ in 0..4 {
+            let perm = crate::game::zones::Permanent::new(land1.clone(), 0);
+            state.battlefield.add_permanent(perm);
+        }
+
+        let cards = vec![bringer.clone(), terror.clone()];
+
+        let choice = DecisionEngine::select_best_from_mill(&cards, &state);
+        // Should return None - never Bringer or Terror
+        assert!(choice.is_none());
+    }
+
+    #[test]
+    fn test_select_best_from_mill_never_returns_terror() {
+        let db = CardDatabase::from_file("cards.json").expect("Failed to load cards");
+        let terror = db.get_card("Terror of the Peaks").expect("Terror should exist");
+        let forest = db.get_card("Forest").expect("Forest should exist");
+
+        let state = GameState::new();
+        let mut state = state;
+        // Add 4+ lands to battlefield
+        let land1 = Card::Land(crate::card::LandCard {
+            base: crate::card::BaseCard {
+                name: "Forest".to_string(),
+                mana_cost: Default::default(),
+                mana_value: 0,
+            },
+            subtype: crate::card::LandSubtype::Basic,
+            enters_tapped: false,
+            colors: vec![crate::card::ManaColor::Green],
+            has_surveil: false,
+            surveil_amount: 0,
+        });
+        for _ in 0..4 {
+            let perm = crate::game::zones::Permanent::new(land1.clone(), 0);
+            state.battlefield.add_permanent(perm);
+        }
+
+        let cards = vec![terror.clone(), forest.clone()];
+
+        let choice = DecisionEngine::select_best_from_mill(&cards, &state);
+        // Should choose forest, never Terror
+        assert_eq!(choice.map(|c| c.name()), Some("Forest"));
     }
 }
 
