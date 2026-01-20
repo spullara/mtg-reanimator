@@ -301,6 +301,88 @@ pub fn main_phase(state: &mut GameState, db: &CardDatabase, verbose: bool, rng: 
         && kiora_in_hand.is_some()
         && could_cast_kiora_after_land_drop();
 
+    // SPECIAL CASE: Analyze the Pollen early casting
+    // Cast it early (without evidence) if:
+    // 1. We need a land for UBG color fixing, OR
+    // 2. Getting to 4 mana enables combo next turn (have Spider-Man + Bringer in GY)
+    let analyze_pollen_idx = state.hand.cards().iter()
+        .position(|c| c.name() == "Analyze the Pollen");
+
+    if let Some(pollen_idx) = analyze_pollen_idx {
+        let can_cast_pollen = mana::can_cast_spell(&state.hand.cards()[pollen_idx], state);
+
+        if can_cast_pollen {
+            let available_colors = get_available_colors(state);
+            let has_u = available_colors.has_blue();
+            let has_b = available_colors.has_black();
+            let has_g = available_colors.has_green();
+            let has_all_colors = has_u && has_b && has_g;
+
+            // Count untapped lands
+            let untapped_lands = state.battlefield.permanents().iter()
+                .filter(|p| matches!(p.card, Card::Land(_)) && !p.tapped)
+                .count() as u32;
+
+            // Check if we have the combo pieces ready
+            let has_spider_man = state.hand.cards().iter()
+                .any(|c| c.name() == "Superior Spider-Man");
+            let has_bringer_in_gy = state.graveyard.cards().iter()
+                .any(|c| c.name() == "Bringer of the Last Gift");
+
+            // Check lands in hand for potential land drop
+            let has_land_in_hand = state.hand.cards().iter()
+                .any(|c| matches!(c, Card::Land(_)));
+
+            // Condition 1: Need a basic land for UBG color fixing
+            // (missing a color and don't have a land that provides it)
+            let needs_color_fixing = !has_all_colors && {
+                // Check if we have a land in hand that would fix our colors
+                let hand_would_fix = state.hand.cards().iter()
+                    .filter_map(|c| if let Card::Land(l) = c { Some(l) } else { None })
+                    .any(|land| {
+                        (!has_u && land.colors.iter().any(|c| *c == ManaColor::Blue)) ||
+                        (!has_b && land.colors.iter().any(|c| *c == ManaColor::Black)) ||
+                        (!has_g && land.colors.iter().any(|c| *c == ManaColor::Green))
+                    });
+                // If we don't have a land in hand that fixes, we should Analyze
+                !hand_would_fix
+            };
+
+            // Condition 2: Getting to 4 mana enables combo next turn
+            // We have Spider-Man + Bringer in GY, currently at 2 or 3 mana,
+            // and with land drop + pollen land we'd have 4
+            let enables_combo_next_turn = has_spider_man && has_bringer_in_gy && {
+                // Current mana + land in hand + pollen land = 4?
+                // If we have 2 lands and a land in hand, pollen would get us to 4
+                // If we have 3 lands and no land in hand, pollen would get us to 4
+                (untapped_lands == 2 && has_land_in_hand) ||
+                (untapped_lands == 3 && !has_land_in_hand && !state.land_played_this_turn)
+            };
+
+            let should_cast_pollen_early = needs_color_fixing || enables_combo_next_turn;
+
+            if should_cast_pollen_early {
+                // Cast Analyze the Pollen early
+                if let Some(card) = state.hand.remove_card(pollen_idx) {
+                    let cost = get_mana_cost(&card);
+                    if mana::tap_lands_for_cost(cost, state, None) {
+                        if verbose {
+                            if needs_color_fixing {
+                                println!("  [Cast] Analyze the Pollen (color fixing - no evidence)");
+                            } else {
+                                println!("  [Cast] Analyze the Pollen (enabling combo - no evidence)");
+                            }
+                        }
+                        let _ = cards::cast_spell(state, &card, db, verbose, rng);
+                    } else {
+                        // Put it back if we can't pay
+                        state.hand.add_card(card);
+                    }
+                }
+            }
+        }
+    }
+
     if !state.land_played_this_turn && !should_prioritize_kiora {
         let mut cast_any = true;
 
