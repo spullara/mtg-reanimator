@@ -6,10 +6,10 @@ use mtg_reanimator::simulation::engine::run_game;
 fn benchmark_single_game(c: &mut Criterion) {
     let db = CardDatabase::from_file("cards.json").expect("Failed to load cards");
     let deck = parse_deck_file("deck.txt", &db).expect("Failed to parse deck");
-    
+
     c.bench_function("single_game_seed_12345", |b| {
         b.iter(|| {
-            run_game(black_box(&deck), black_box(12345), black_box(&db))
+            run_game(black_box(&deck), black_box(12345), black_box(&db), black_box(false))
         })
     });
 }

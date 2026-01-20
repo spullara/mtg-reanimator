@@ -9,10 +9,10 @@ use crate::simulation::deck::parse_deck_file;
 fn test_full_game_with_seed_12345() {
     let db = CardDatabase::from_file("cards.json").expect("Failed to load cards");
     let deck = parse_deck_file("deck.txt", &db).expect("Failed to parse deck");
-    
+
     // Run game with known seed
-    let result = run_game(&deck, 12345, &db);
-    
+    let result = run_game(&deck, 12345, &db, false);
+
     // Verify basic properties
     assert!(result.on_the_play || !result.on_the_play, "on_the_play should be set");
     assert!(result.win_turn.is_none() || result.win_turn.unwrap() <= 20, "win_turn should be <= 20");
@@ -61,8 +61,8 @@ fn test_game_completes_within_20_turns() {
     
     // Run multiple games
     for seed in 1..=10 {
-        let result = run_game(&deck, seed, &db);
-        
+        let result = run_game(&deck, seed, &db, false);
+
         // If game won, it should be within 20 turns
         if let Some(win_turn) = result.win_turn {
             assert!(win_turn <= 20, "Game should win within 20 turns, got turn {}", win_turn);
@@ -75,8 +75,8 @@ fn test_game_completes_within_20_turns() {
 fn test_mana_color_tracking() {
     let db = CardDatabase::from_file("cards.json").expect("Failed to load cards");
     let deck = parse_deck_file("deck.txt", &db).expect("Failed to parse deck");
-    
-    let result = run_game(&deck, 99999, &db);
+
+    let result = run_game(&deck, 99999, &db, false);
     
     // Verify mana color tracking is consistent
     // If we have UBG, we should have U, B, and G individually

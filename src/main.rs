@@ -47,6 +47,10 @@ enum Commands {
         /// Seed for reproducibility
         #[arg(short, long)]
         seed: Option<u64>,
+
+        /// Enable verbose output for single game
+        #[arg(short, long)]
+        verbose: bool,
     },
 
     /// Compare two deck configurations
@@ -94,8 +98,9 @@ fn main() {
             num_games,
             deck,
             seed,
+            verbose,
         }) => {
-            run_simulation(&db, &deck, num_games, seed);
+            run_simulation(&db, &deck, num_games, seed, verbose);
         }
         Some(Commands::Compare {
             deck1,
@@ -110,12 +115,12 @@ fn main() {
         None => {
             // Default: run simulation with CLI args
             let num_games = if cli.verbose { 1 } else { 1000 };
-            run_simulation(&db, &cli.deck, num_games, cli.seed);
+            run_simulation(&db, &cli.deck, num_games, cli.seed, cli.verbose);
         }
     }
 }
 
-fn run_simulation(db: &CardDatabase, deck_file: &str, num_games: usize, seed: Option<u64>) {
+fn run_simulation(db: &CardDatabase, deck_file: &str, num_games: usize, seed: Option<u64>, verbose: bool) {
     let deck = match parse_deck_file(deck_file, db) {
         Ok(deck) => deck,
         Err(e) => {
@@ -136,7 +141,7 @@ fn run_simulation(db: &CardDatabase, deck_file: &str, num_games: usize, seed: Op
     let results: Vec<_> = if let Some(base_seed) = seed {
         // Sequential with fixed seed
         (0..num_games)
-            .map(|i| run_game(&deck, base_seed + i as u64, db))
+            .map(|i| run_game(&deck, base_seed + i as u64, db, verbose && i == 0))
             .collect()
     } else {
         // Parallel with random seeds
@@ -148,7 +153,7 @@ fn run_simulation(db: &CardDatabase, deck_file: &str, num_games: usize, seed: Op
                     .unwrap()
                     .as_nanos() as u64)
                     .wrapping_add(i as u64);
-                run_game(&deck, seed, db)
+                run_game(&deck, seed, db, false)
             })
             .collect()
     };
@@ -248,7 +253,7 @@ fn compare_decks(db: &CardDatabase, deck1_file: &str, deck2_file: &str, num_game
                 .unwrap()
                 .as_nanos() as u64)
                 .wrapping_add(i as u64);
-            run_game(&deck1, seed, db)
+            run_game(&deck1, seed, db, false)
         })
         .collect();
 
@@ -262,7 +267,7 @@ fn compare_decks(db: &CardDatabase, deck1_file: &str, deck2_file: &str, num_game
                 .unwrap()
                 .as_nanos() as u64)
                 .wrapping_add(i as u64 + num_games as u64);
-            run_game(&deck2, seed, db)
+            run_game(&deck2, seed, db, false)
         })
         .collect();
 
@@ -364,7 +369,7 @@ fn optimize_lands(db: &CardDatabase, num_configs: usize, games_per_config: usize
                         .unwrap()
                         .as_nanos() as u64)
                         .wrapping_add(i as u64);
-                    run_game(&deck, seed, db)
+                    run_game(&deck, seed, db, false)
                 })
                 .collect();
 

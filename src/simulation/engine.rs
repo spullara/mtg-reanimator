@@ -60,9 +60,9 @@ fn get_available_colors(state: &GameState) -> std::collections::HashSet<String> 
 }
 
 /// Simulate combat phase: declare attackers and deal damage
-pub fn simulate_combat(state: &mut GameState) -> u32 {
+pub fn simulate_combat(state: &mut GameState, verbose: bool) -> u32 {
     let mut total_damage = 0;
-    
+
     // Find eligible attackers (creatures without summoning sickness, not tapped)
     let mut attackers = Vec::new();
     for (idx, permanent) in state.battlefield.permanents().iter().enumerate() {
@@ -70,57 +70,81 @@ pub fn simulate_combat(state: &mut GameState) -> u32 {
         if !matches!(permanent.card, Card::Creature(_)) {
             continue;
         }
-        
+
         // Check summoning sickness (entered before this turn)
         if permanent.turn_entered >= state.turn {
             continue;
         }
-        
+
         // Check if tapped
         if permanent.tapped {
             continue;
         }
-        
+
         attackers.push(idx);
     }
-    
+
     // Tap all attackers and calculate damage
     for idx in attackers {
         if let Some(permanent) = state.battlefield.permanents_mut().get_mut(idx) {
             permanent.tapped = true;
-            
+
             // Get creature power
             if let Card::Creature(creature) = &permanent.card {
                 total_damage += creature.power as u32;
             }
         }
     }
-    
+
     // Deal damage to opponent
     state.opponent_life -= total_damage as i32;
-    
+
+    if verbose && total_damage > 0 {
+        println!("[Combat] {} damage dealt", total_damage);
+    }
+
     total_damage
 }
 
 /// Execute a single turn: untap -> draw -> main -> combat -> end
-pub fn execute_turn(state: &mut GameState, db: &CardDatabase) -> u32 {
+pub fn execute_turn(state: &mut GameState, db: &CardDatabase, verbose: bool) -> u32 {
     // Start turn: increment turn counter, untap, reset land drop
     start_turn(state);
+
+    if verbose {
+        println!("\n=== TURN {} ===", state.turn);
+    }
 
     // Upkeep phase
     upkeep_phase(state);
 
     // Draw phase
     state.phase = crate::game::state::Phase::Draw;
+    let hand_before = state.hand.size();
     draw_phase(state);
+
+    if verbose {
+        if state.hand.size() > hand_before {
+            // Get the last card drawn
+            if let Some(card) = state.hand.cards().last() {
+                println!("[Draw] Drew: {}", card.name());
+            }
+        } else if state.turn == 1 && state.on_the_play {
+            println!("[Draw] Skipped (on the play)");
+        }
+    }
 
     // Main phase 1: Play lands and cast spells
     state.phase = crate::game::state::Phase::Main1;
-    execute_main_phase(state, db);
+    if verbose {
+        let hand_names: Vec<&str> = state.hand.cards().iter().map(|c| c.name()).collect();
+        println!("[Main 1] Hand: {}", hand_names.join(", "));
+    }
+    execute_main_phase(state, db, verbose);
 
     // Combat phase
     state.phase = crate::game::state::Phase::Combat;
-    let combat_damage = simulate_combat(state);
+    let combat_damage = simulate_combat(state, verbose);
 
     // Main phase 2: Additional spell casting could happen here
     state.phase = crate::game::state::Phase::Main2;
@@ -129,6 +153,29 @@ pub fn execute_turn(state: &mut GameState, db: &CardDatabase) -> u32 {
     // End phase
     state.phase = crate::game::state::Phase::End;
     end_phase(state);
+
+    if verbose {
+        println!("[End of Turn {}]", state.turn);
+        let battlefield_names: Vec<String> = state.battlefield.permanents()
+            .iter()
+            .map(|p| {
+                let mut name = p.card.name().to_string();
+                if let Some(copy_of) = &p.is_copy_of {
+                    name.push_str(&format!(" (copy of {})", copy_of));
+                }
+                if let Some(time_counters) = p.counters.get(&crate::game::zones::CounterType::Time) {
+                    name.push_str(&format!(" ({} time counters)", time_counters));
+                }
+                name
+            })
+            .collect();
+        println!("  Battlefield: {}", if battlefield_names.is_empty() { "(empty)".to_string() } else { battlefield_names.join(", ") });
+
+        let graveyard_names: Vec<&str> = state.graveyard.cards().iter().map(|c| c.name()).collect();
+        println!("  Graveyard: {}", if graveyard_names.is_empty() { "(empty)".to_string() } else { graveyard_names.join(", ") });
+
+        println!("  Opponent life: {}", state.opponent_life);
+    }
 
     combat_damage
 }
@@ -146,7 +193,7 @@ fn get_mana_cost(card: &Card) -> &crate::card::ManaCost {
 }
 
 /// Execute main phase: play lands and cast spells
-fn execute_main_phase(state: &mut GameState, db: &CardDatabase) {
+fn execute_main_phase(state: &mut GameState, db: &CardDatabase, verbose: bool) {
     // Step 1: Tap all untapped lands for mana
     let mut lands_to_tap = Vec::new();
     for (idx, permanent) in state.battlefield.permanents().iter().enumerate() {
@@ -167,7 +214,18 @@ fn execute_main_phase(state: &mut GameState, db: &CardDatabase) {
         let hand_cards = state.hand.cards().to_vec();
         if let Some(land_idx) = DecisionEngine::choose_land_to_play(&hand_cards, state) {
             if let Some(card) = state.hand.remove_card(land_idx) {
+                let card_name = card.name().to_string();
                 let _ = cards::play_land(state, &card);
+                if verbose {
+                    // Check if land entered tapped
+                    let last_perm = state.battlefield.permanents().last();
+                    let tapped_str = if let Some(perm) = last_perm {
+                        if perm.tapped { " (tapped)" } else { "" }
+                    } else {
+                        ""
+                    };
+                    println!("  [Land] {}{}", card_name, tapped_str);
+                }
             }
         }
     }
@@ -223,6 +281,7 @@ fn execute_main_phase(state: &mut GameState, db: &CardDatabase) {
             }
 
             // Cast the card based on type
+            let card_name = card.name().to_string();
             match &card {
                 Card::Creature(_) => {
                     let _ = cards::cast_creature(state, &card, false);
@@ -234,15 +293,28 @@ fn execute_main_phase(state: &mut GameState, db: &CardDatabase) {
                         let _ = cards::process_etb_triggers(state, &mut perm, db);
                         state.battlefield.permanents_mut()[perm_idx] = perm;
                     }
+
+                    if verbose {
+                        println!("  [Cast] {}", card_name);
+                    }
                 }
                 Card::Land(_) => {
                     let _ = cards::play_land(state, &card);
+                    if verbose {
+                        println!("  [Land] {}", card_name);
+                    }
                 }
                 Card::Instant(_) | Card::Sorcery(_) | Card::Enchantment(_) => {
                     let _ = cards::cast_spell(state, &card, db);
+                    if verbose {
+                        println!("  [Cast] {}", card_name);
+                    }
                 }
                 Card::Saga(_) => {
                     let _ = cards::cast_spell(state, &card, db);
+                    if verbose {
+                        println!("  [Cast] {}", card_name);
+                    }
                 }
             }
         } else {
@@ -256,22 +328,23 @@ pub fn run_game(
     deck: &[Card],
     seed: u64,
     _db: &CardDatabase,
+    verbose: bool,
 ) -> GameResult {
     let mut rng = GameRng::new(Some(seed));
-    
+
     // Initialize game state
     let mut state = GameState::new();
-    
+
     // Shuffle deck into library
     let mut shuffled_deck = deck.to_vec();
     rng.shuffle(&mut shuffled_deck);
     for card in shuffled_deck {
         state.library.add_card(card);
     }
-    
+
     // Determine if on play or draw (50/50)
     state.on_the_play = rng.random() < 0.5;
-    
+
     // Mulligan phase: resolve mulligans to get opening hand
     let mut library_cards = Vec::new();
     for _ in 0..state.library.size() {
@@ -279,17 +352,27 @@ pub fn run_game(
             library_cards.push(card);
         }
     }
-    
+
     let opening_hand = resolve_mulligans(&mut library_cards, &mut rng);
-    
+
     // Put remaining cards back in library
     for card in library_cards {
         state.library.add_card(card);
     }
-    
+
     // Add opening hand to hand
-    for card in opening_hand {
+    for card in opening_hand.clone() {
         state.hand.add_card(card);
+    }
+
+    // Print game start info if verbose
+    if verbose {
+        println!("=== Game Start (seed: {}) ===", seed);
+        println!("{}", if state.on_the_play { "On the play" } else { "On the draw" });
+        println!("Opening hand ({} cards):", opening_hand.len());
+        for card in &opening_hand {
+            println!("  - {}", card.name());
+        }
     }
     
     // Game loop
@@ -304,9 +387,9 @@ pub fn run_game(
     
     while state.turn < max_turns && !check_win_condition(&state) {
         let life_before = state.opponent_life;
-        
+
         // Execute turn
-        let combat_damage = execute_turn(&mut state, _db);
+        let combat_damage = execute_turn(&mut state, _db, verbose);
         total_combat_damage += combat_damage;
         
         // Track combo damage (non-combat damage)
