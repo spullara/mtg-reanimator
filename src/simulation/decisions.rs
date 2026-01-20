@@ -1,4 +1,5 @@
 use crate::card::{Card, CardType, LandCard, LandSubtype, ManaColor};
+use crate::game::mana;
 use crate::game::state::GameState;
 use std::collections::HashSet;
 
@@ -27,13 +28,15 @@ impl DecisionEngine {
         let mut mana_available = 0;
         let mut colors_available = HashSet::new();
         for perm in state.battlefield.permanents() {
-            if let Card::Land(land) = &perm.card {
-                if !perm.tapped {
-                    mana_available += 1;
-                    for color in &land.colors {
-                        colors_available.insert(*color);
-                    }
-                }
+            if matches!(perm.card, Card::Land(_)) && !perm.tapped {
+                mana_available += 1;
+                // Use can_tap_for_mana to correctly evaluate conditional lands (Verge, Cavern, etc.)
+                let land_colors = mana::can_tap_for_mana(perm, state, None);
+                if land_colors.has_white() { colors_available.insert(ManaColor::White); }
+                if land_colors.has_blue() { colors_available.insert(ManaColor::Blue); }
+                if land_colors.has_black() { colors_available.insert(ManaColor::Black); }
+                if land_colors.has_red() { colors_available.insert(ManaColor::Red); }
+                if land_colors.has_green() { colors_available.insert(ManaColor::Green); }
             }
         }
 

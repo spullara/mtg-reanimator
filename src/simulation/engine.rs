@@ -22,15 +22,16 @@ pub fn check_win_condition(state: &GameState) -> bool {
 }
 
 /// Get available mana colors from battlefield lands as bitflags (no allocations)
+/// Uses can_tap_for_mana to correctly handle conditional lands like Verge lands
 #[inline]
 fn get_available_colors(state: &GameState) -> ColorFlags {
     let mut colors = ColorFlags::new();
 
     for permanent in state.battlefield.permanents() {
-        if let Card::Land(land) = &permanent.card {
-            for color in &land.colors {
-                colors.insert(*color);
-            }
+        if matches!(permanent.card, Card::Land(_)) {
+            // Use can_tap_for_mana to correctly evaluate conditional lands (Verge, Cavern, etc.)
+            let land_colors = mana::can_tap_for_mana(permanent, state, None);
+            colors.0 |= land_colors.0;
         }
     }
 
@@ -270,12 +271,13 @@ pub fn main_phase(state: &mut GameState, db: &CardDatabase, verbose: bool, rng: 
         });
 
         // Also check if we already have U available and just need an untapped land for mana count
+        // Use can_tap_for_mana to correctly handle conditional lands like Verge lands
         let has_u_available = state.battlefield.permanents().iter().any(|p| {
             if p.tapped {
                 return false;
             }
-            if let Card::Land(land) = &p.card {
-                land.colors.contains(&ManaColor::Blue)
+            if matches!(p.card, Card::Land(_)) {
+                mana::can_tap_for_mana(p, state, None).has_blue()
             } else {
                 false
             }
