@@ -75,6 +75,10 @@ enum Commands {
         /// Number of games per configuration
         #[arg(short, long, default_value = "1000")]
         games: usize,
+
+        /// Strategy for generating land configurations: "weighted" or "shuffle"
+        #[arg(short, long, default_value = "weighted")]
+        strategy: String,
     },
 }
 
@@ -109,8 +113,8 @@ fn main() {
         }) => {
             compare_decks(&db, &deck1, &deck2, num_games);
         }
-        Some(Commands::Optimize { configs, games }) => {
-            optimize_lands(&db, configs, games);
+        Some(Commands::Optimize { configs, games, strategy }) => {
+            optimize_lands(&db, configs, games, &strategy);
         }
         None => {
             // Default: run simulation with CLI args
@@ -343,13 +347,22 @@ fn compare_decks(db: &CardDatabase, deck1_file: &str, deck2_file: &str, num_game
     println!("\nCompleted in {:.2?}", elapsed);
 }
 
-fn optimize_lands(db: &CardDatabase, num_configs: usize, games_per_config: usize) {
-    use simulation::optimize::{generate_random_land_config_weighted, build_deck_from_config, config_to_string};
+fn optimize_lands(db: &CardDatabase, num_configs: usize, games_per_config: usize, strategy: &str) {
+    use simulation::optimize::{generate_random_land_config_weighted, generate_random_land_config_shuffle, build_deck_from_config, config_to_string};
     use crate::rng::GameRng;
 
+    let strategy_desc = match strategy {
+        "weighted" => "Random counts for each land type, respecting max limits",
+        "shuffle" => "Pool of max copies shuffled, take first 24",
+        _ => {
+            eprintln!("Unknown strategy '{}'. Use 'weighted' or 'shuffle'.", strategy);
+            return;
+        }
+    };
+
     println!("\n=== MTG Land Optimization ===\n");
-    println!("Strategy: weighted");
-    println!("  - weighted: Random counts for each land type, respecting max limits\n");
+    println!("Strategy: {}", strategy);
+    println!("  - {}\n", strategy_desc);
     println!("Testing {} random land configurations", num_configs);
     println!("Running {} games per configuration...\n", games_per_config);
     println!("Fixed non-land cards: 36 cards");
@@ -363,9 +376,12 @@ fn optimize_lands(db: &CardDatabase, num_configs: usize, games_per_config: usize
     let start = std::time::Instant::now();
 
     for i in 0..num_configs {
-        // Generate random land configuration
+        // Generate random land configuration using selected strategy
         let mut rng = GameRng::new(None);
-        let config = generate_random_land_config_weighted(&mut rng);
+        let config = match strategy {
+            "shuffle" => generate_random_land_config_shuffle(&mut rng),
+            _ => generate_random_land_config_weighted(&mut rng),
+        };
 
         // Build deck from config
         let deck = match build_deck_from_config(&config, db) {

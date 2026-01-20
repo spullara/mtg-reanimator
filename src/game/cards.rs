@@ -102,6 +102,24 @@ pub fn play_land(state: &mut GameState, card: &Card, verbose: bool) -> Result<()
     let mut permanent = Permanent::new(card.clone(), state.turn);
     permanent.tapped = enters_tapped;
 
+    // Handle Cavern of Souls - choose creature type
+    if land.base.name == "Cavern of Souls" {
+        let chosen_type = choose_cavern_type(state);
+        if verbose {
+            println!("    (Cavern set to: {})", chosen_type);
+        }
+        permanent.chosen_type = Some(chosen_type);
+    }
+
+    // Handle Multiversal Passage - choose basic land type (color)
+    if land.base.name == "Multiversal Passage" {
+        let chosen_color = choose_passage_color(state);
+        if verbose {
+            println!("    (Passage set to: {})", chosen_color);
+        }
+        permanent.chosen_basic_type = Some(chosen_color);
+    }
+
     // Handle surveil lands
     if land.has_surveil && land.surveil_amount > 0 {
         resolve_surveil(state, land.surveil_amount as usize, verbose);
@@ -111,6 +129,143 @@ pub fn play_land(state: &mut GameState, card: &Card, verbose: bool) -> Result<()
     state.land_played_this_turn = true;
 
     Ok(())
+}
+
+/// Choose creature type for Cavern of Souls
+/// Priority: Human (Spider-Man, Town Greeter) > Demon (Bringer) > Noble (Kiora) > Dragon (Terror) > Avatar (Overlord)
+fn choose_cavern_type(state: &GameState) -> String {
+    // Get creatures in hand
+    let creatures_in_hand: Vec<&Card> = state
+        .hand
+        .cards()
+        .iter()
+        .filter(|c| matches!(c, Card::Creature(_)))
+        .collect();
+
+    // Check if we already have a Cavern with Human type
+    let has_human_cavern = state
+        .battlefield
+        .permanents()
+        .iter()
+        .any(|p| {
+            if let Card::Land(l) = &p.card {
+                l.base.name == "Cavern of Souls" && p.chosen_type.as_deref() == Some("Human")
+            } else {
+                false
+            }
+        });
+
+    // Check if we have another Cavern in hand
+    let caverns_in_hand = state
+        .hand
+        .cards()
+        .iter()
+        .filter(|c| c.name() == "Cavern of Souls")
+        .count();
+
+    let has_kiora_in_hand = creatures_in_hand.iter().any(|c| c.name() == "Kiora, the Rising Tide");
+    let has_bringer_or_terror_in_hand = creatures_in_hand
+        .iter()
+        .any(|c| c.name() == "Bringer of the Last Gift" || c.name() == "Terror of the Peaks");
+
+    // Special case: If we have Kiora + Bringer/Terror in hand AND another Cavern coming,
+    // set this one to Noble (cast Kiora first to discard Bringer/Terror)
+    if !has_human_cavern && has_kiora_in_hand && has_bringer_or_terror_in_hand && caverns_in_hand >= 1 {
+        return "Noble".to_string();
+    }
+
+    if has_human_cavern {
+        // We already have Human covered, pick something else based on hand
+        if creatures_in_hand.iter().any(|c| c.name() == "Bringer of the Last Gift") {
+            return "Demon".to_string();
+        } else if creatures_in_hand.iter().any(|c| c.name() == "Kiora, the Rising Tide") {
+            return "Noble".to_string();
+        } else if creatures_in_hand.iter().any(|c| c.name() == "Overlord of the Balemurk") {
+            return "Avatar".to_string();
+        } else if creatures_in_hand.iter().any(|c| c.name() == "Terror of the Peaks") {
+            return "Dragon".to_string();
+        } else {
+            // No specific need, default to Demon (in case we draw Bringer)
+            return "Demon".to_string();
+        }
+    }
+
+    // First Cavern - default to Human (helps Spider-Man and Town Greeter)
+    "Human".to_string()
+}
+
+/// Helper to get mana cost from any card
+fn card_mana_cost(card: &Card) -> &ManaCost {
+    match card {
+        Card::Land(c) => &c.base.mana_cost,
+        Card::Creature(c) => &c.base.mana_cost,
+        Card::Instant(c) => &c.base.mana_cost,
+        Card::Sorcery(c) => &c.base.mana_cost,
+        Card::Enchantment(c) => &c.base.mana_cost,
+        Card::Saga(c) => &c.base.mana_cost,
+    }
+}
+
+/// Choose basic land type for Multiversal Passage
+/// Priority: Fill missing colors for castable spells
+fn choose_passage_color(state: &GameState) -> String {
+    // Check what colors we currently have access to from untapped lands
+    let mut has_blue = false;
+    let mut has_black = false;
+    let mut has_green = false;
+
+    for perm in state.battlefield.permanents() {
+        if perm.tapped {
+            continue;
+        }
+        if let Card::Land(land) = &perm.card {
+            for color in &land.colors {
+                match color {
+                    ManaColor::Blue => has_blue = true,
+                    ManaColor::Black => has_black = true,
+                    ManaColor::Green => has_green = true,
+                    _ => {}
+                }
+            }
+        }
+    }
+
+    // Check what colors we need for spells in hand
+    let mut needs_blue = false;
+    let mut needs_black = false;
+    let mut needs_green = false;
+
+    for card in state.hand.cards() {
+        let cost = card_mana_cost(card);
+        if cost.blue > 0 {
+            needs_blue = true;
+        }
+        if cost.black > 0 {
+            needs_black = true;
+        }
+        if cost.green > 0 {
+            needs_green = true;
+        }
+    }
+
+    // Priority: Fill missing colors for castable spells
+    if needs_green && !has_green {
+        return "G".to_string();
+    } else if needs_blue && !has_blue {
+        return "U".to_string();
+    } else if needs_black && !has_black {
+        return "B".to_string();
+    } else if !has_blue {
+        // Default: prioritize blue for Spider-Man and Kiora
+        return "U".to_string();
+    } else if !has_black {
+        return "B".to_string();
+    } else if !has_green {
+        return "G".to_string();
+    }
+
+    // Fallback
+    "U".to_string()
 }
 
 /// Tap a land to add mana to the pool
@@ -651,9 +806,17 @@ pub fn cast_spell(
                             milled_cards.push(card);
                         }
 
+                        if verbose {
+                            let names: Vec<&str> = milled_cards.iter().map(|c| c.name()).collect();
+                            println!("    Mill 4: {}", names.join(", "));
+                        }
+
                         // Choose which card to return (prioritize Spider-Man, then Kiora, then lands)
                         if let Some(idx) = DecisionEngine::choose_mill_return(&milled_cards, CardType::Creature) {
                             let card_to_return = milled_cards.remove(idx);
+                            if verbose {
+                                println!("    -> Returned to hand: {}", card_to_return.name());
+                            }
                             state.hand.add_card(card_to_return);
                         }
 
