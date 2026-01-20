@@ -1,9 +1,13 @@
 use std::collections::HashMap;
 use crate::card::{Card, CardDatabase};
 use crate::rng::GameRng;
+use crate::simulation::deck::parse_deck_file;
 
 /// Land configuration: map of land name to count
 pub type LandConfig = HashMap<String, usize>;
+
+/// Fixed cards configuration: map of card name to count (extracted from deck file)
+pub type FixedCards = Vec<(String, usize)>;
 
 /// Land type definition with constraints
 #[derive(Clone, Debug)]
@@ -13,21 +17,26 @@ pub struct LandType {
     pub max: usize,
 }
 
-/// Fixed non-land cards that stay the same across all configurations
-pub const FIXED_CARDS: &[(&str, usize)] = &[
-    ("Terror of the Peaks", 4),
-    ("Bringer of the Last Gift", 4),
-    ("Superior Spider-Man", 4),
-    ("Overlord of the Balemurk", 4),
-    ("Kiora, the Rising Tide", 4),
-    ("Town Greeter", 3),
-    ("Cache Grab", 4),
-    ("Dredger's Insight", 4),
-    ("Awaken the Honored Dead", 4),
-    ("Analyze the Pollen", 1),
-];
-
 pub const TOTAL_LANDS: usize = 24; // 60 - 36
+
+/// Extract non-land cards from a deck file
+pub fn extract_fixed_cards_from_deck(deck_file: &str, db: &CardDatabase) -> Result<FixedCards, String> {
+    let deck = parse_deck_file(deck_file, db).map_err(|e| format!("{:?}", e))?;
+
+    // Count each non-land card
+    let mut card_counts: HashMap<String, usize> = HashMap::new();
+    for card in deck {
+        if !matches!(card, Card::Land(_)) {
+            *card_counts.entry(card.name().to_string()).or_insert(0) += 1;
+        }
+    }
+
+    // Convert to sorted vector for consistent ordering
+    let mut fixed_cards: FixedCards = card_counts.into_iter().collect();
+    fixed_cards.sort_by(|a, b| a.0.cmp(&b.0));
+
+    Ok(fixed_cards)
+}
 
 /// Get all available land types with their constraints
 pub fn get_land_types() -> Vec<LandType> {
@@ -125,12 +134,12 @@ pub fn generate_random_land_config_shuffle(rng: &mut GameRng) -> LandConfig {
     config
 }
 
-/// Build a complete deck from a land configuration
-pub fn build_deck_from_config(config: &LandConfig, db: &CardDatabase) -> Result<Vec<Card>, String> {
+/// Build a complete deck from a land configuration and fixed cards
+pub fn build_deck_from_config_with_fixed(config: &LandConfig, fixed_cards: &FixedCards, db: &CardDatabase) -> Result<Vec<Card>, String> {
     let mut cards = Vec::new();
 
     // Add fixed cards
-    for (card_name, count) in FIXED_CARDS {
+    for (card_name, count) in fixed_cards {
         for _ in 0..*count {
             match db.get_card(card_name) {
                 Ok(card) => cards.push(card.clone()),
@@ -152,6 +161,8 @@ pub fn build_deck_from_config(config: &LandConfig, db: &CardDatabase) -> Result<
     Ok(cards)
 }
 
+
+
 /// Format a land configuration as a readable string
 pub fn config_to_string(config: &LandConfig) -> String {
     let mut items: Vec<_> = config
@@ -170,16 +181,13 @@ pub fn config_to_string(config: &LandConfig) -> String {
         .join(", ")
 }
 
-/// Calculate a short hash for a deck configuration
-pub fn calculate_deck_hash(config: &LandConfig) -> String {
+/// Calculate a short hash for a deck configuration with custom fixed cards
+pub fn calculate_deck_hash_with_fixed(config: &LandConfig, fixed_cards: &FixedCards) -> String {
     use std::collections::hash_map::DefaultHasher;
     use std::hash::{Hash, Hasher};
 
     // Create a sorted list of all cards (fixed + lands)
-    let mut all_cards: Vec<(String, usize)> = FIXED_CARDS
-        .iter()
-        .map(|(name, count)| (name.to_string(), *count))
-        .collect();
+    let mut all_cards: Vec<(String, usize)> = fixed_cards.clone();
 
     for (name, count) in config {
         if *count > 0 {
@@ -201,13 +209,16 @@ pub fn calculate_deck_hash(config: &LandConfig) -> String {
     format!("{:016x}", hasher.finish())[..8].to_string()
 }
 
+
+
 /// Parameters for saving a deck configuration
-pub struct DeckSaveParams {
+pub struct DeckSaveParams<'a> {
     pub win_rate: f64,
     pub avg_win_turn: f64,
     pub num_simulations: usize,
     pub strategy: String,
     pub turn_distribution: std::collections::HashMap<u32, usize>,
+    pub fixed_cards: &'a FixedCards,
 }
 
 /// Save a deck configuration to a file with optimization results
@@ -216,7 +227,7 @@ pub fn save_deck_to_file(config: &LandConfig, params: &DeckSaveParams) -> std::i
     use std::io::Write;
     use chrono::Local;
 
-    let hash = calculate_deck_hash(config);
+    let hash = calculate_deck_hash_with_fixed(config, params.fixed_cards);
     let filename = format!("deck_{}.txt", hash);
 
     let mut file = File::create(&filename)?;
@@ -246,9 +257,14 @@ pub fn save_deck_to_file(config: &LandConfig, params: &DeckSaveParams) -> std::i
     }
     writeln!(file)?;
 
+    // Calculate total fixed cards
+    let fixed_card_count: usize = params.fixed_cards.iter().map(|(_, count)| count).sum();
+
     // Write fixed cards first
-    writeln!(file, "# Fixed cards (36)")?;
-    for (name, count) in FIXED_CARDS {
+    writeln!(file, "# Fixed cards ({})", fixed_card_count)?;
+    let mut sorted_fixed: Vec<_> = params.fixed_cards.iter().collect();
+    sorted_fixed.sort_by(|a, b| a.0.cmp(&b.0));
+    for (name, count) in sorted_fixed {
         writeln!(file, "{} {}", count, name)?;
     }
 

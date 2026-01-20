@@ -79,6 +79,10 @@ enum Commands {
         /// Strategy for generating land configurations: "weighted" or "shuffle"
         #[arg(short, long, default_value = "weighted")]
         strategy: String,
+
+        /// Base deck file to use for fixed cards (lands will be replaced)
+        #[arg(short, long, default_value = "deck.txt")]
+        deck: String,
     },
 
     /// Analyze turn 4 combo failure reasons
@@ -128,8 +132,8 @@ fn main() {
         }) => {
             compare_decks(&db, &deck1, &deck2, num_games);
         }
-        Some(Commands::Optimize { configs, games, strategy }) => {
-            optimize_lands(&db, configs, games, &strategy);
+        Some(Commands::Optimize { configs, games, strategy, deck }) => {
+            optimize_lands(&db, configs, games, &strategy, &deck);
         }
         Some(Commands::Analyze { num_games, deck, seed }) => {
             analyze_turn4_failures(&db, &deck, num_games, seed);
@@ -374,8 +378,8 @@ fn compare_decks(db: &CardDatabase, deck1_file: &str, deck2_file: &str, num_game
     println!("\nCompleted in {:.2?}", elapsed);
 }
 
-fn optimize_lands(db: &CardDatabase, num_configs: usize, games_per_config: usize, strategy: &str) {
-    use simulation::optimize::{generate_random_land_config_weighted, generate_random_land_config_shuffle, build_deck_from_config, config_to_string, save_deck_to_file, DeckSaveParams};
+fn optimize_lands(db: &CardDatabase, num_configs: usize, games_per_config: usize, strategy: &str, deck_file: &str) {
+    use simulation::optimize::{generate_random_land_config_weighted, generate_random_land_config_shuffle, build_deck_from_config_with_fixed, config_to_string, save_deck_to_file, DeckSaveParams, extract_fixed_cards_from_deck};
     use crate::rng::GameRng;
 
     let strategy_desc = match strategy {
@@ -387,12 +391,24 @@ fn optimize_lands(db: &CardDatabase, num_configs: usize, games_per_config: usize
         }
     };
 
+    // Extract fixed (non-land) cards from the deck file
+    let fixed_cards = match extract_fixed_cards_from_deck(deck_file, db) {
+        Ok(cards) => cards,
+        Err(e) => {
+            eprintln!("Failed to parse deck file '{}': {}", deck_file, e);
+            return;
+        }
+    };
+
+    let fixed_card_count: usize = fixed_cards.iter().map(|(_, count)| count).sum();
+
     println!("\n=== MTG Land Optimization ===\n");
+    println!("Base deck: {}", deck_file);
     println!("Strategy: {}", strategy);
     println!("  - {}\n", strategy_desc);
     println!("Testing {} random land configurations", num_configs);
     println!("Running {} games per configuration...\n", games_per_config);
-    println!("Fixed non-land cards: 36 cards");
+    println!("Fixed non-land cards: {} cards", fixed_card_count);
     println!("Land slots to fill: 24 cards\n");
 
     let mut best_config = None;
@@ -411,8 +427,8 @@ fn optimize_lands(db: &CardDatabase, num_configs: usize, games_per_config: usize
             _ => generate_random_land_config_weighted(&mut rng),
         };
 
-        // Build deck from config
-        let deck = match build_deck_from_config(&config, db) {
+        // Build deck from config using the fixed cards from the deck file
+        let deck = match build_deck_from_config_with_fixed(&config, &fixed_cards, db) {
             Ok(d) => d,
             Err(e) => {
                 eprintln!("Error building deck: {}", e);
@@ -507,6 +523,7 @@ fn optimize_lands(db: &CardDatabase, num_configs: usize, games_per_config: usize
             num_simulations: games_per_config,
             strategy: strategy.to_string(),
             turn_distribution: best_turn_distribution,
+            fixed_cards: &fixed_cards,
         };
         match save_deck_to_file(config, &params) {
             Ok(filename) => println!("\nBest deck saved to: {}", filename),
