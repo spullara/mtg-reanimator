@@ -610,30 +610,54 @@ impl DecisionEngine {
     }
 
     /// Choose which card to return from mill
-    /// Priority: Spider-Man > Kiora > lands (if desperate) > other creatures > nothing
-    pub fn choose_mill_return(graveyard: &[Card], _card_type: CardType) -> Option<usize> {
-        // NEVER return Bringer or Terror - they should stay in graveyard
-        for (idx, card) in graveyard.iter().enumerate() {
-            let name = card.name();
-            if name == "Bringer of the Last Gift" || name == "Terror of the Peaks" {
-                continue;
-            }
+    /// Priority: Spider-Man > Kiora > blue-producing lands > other useful lands > other creatures > nothing
+    pub fn choose_mill_return(milled: &[Card], _card_type: CardType) -> Option<usize> {
+        // NEVER return Bringer or Terror - they should stay in graveyard for reanimation
 
-            // Prioritize Spider-Man
-            if name == "Superior Spider-Man" {
+        // Priority 1: Spider-Man (the combo piece we need in hand)
+        for (idx, card) in milled.iter().enumerate() {
+            if card.name() == "Superior Spider-Man" {
                 return Some(idx);
             }
         }
 
-        // Then Kiora
-        for (idx, card) in graveyard.iter().enumerate() {
+        // Priority 2: Kiora (helps discard combo pieces to graveyard)
+        for (idx, card) in milled.iter().enumerate() {
             if card.name() == "Kiora, the Rising Tide" {
                 return Some(idx);
             }
         }
 
-        // Then other creatures (but not Bringer/Terror)
-        for (idx, card) in graveyard.iter().enumerate() {
+        // Priority 3: Blue-producing lands (critical for casting Kiora and Spider-Man)
+        // Priority: Watery Grave, Undercity Sewers, Gloomlake Verge, Island
+        let blue_lands = ["Watery Grave", "Undercity Sewers", "Gloomlake Verge", "Island"];
+        for (idx, card) in milled.iter().enumerate() {
+            if let Card::Land(land) = card {
+                if blue_lands.contains(&land.base.name.as_str()) {
+                    return Some(idx);
+                }
+            }
+        }
+
+        // Priority 4: Other dual/utility lands (for mana fixing)
+        for (idx, card) in milled.iter().enumerate() {
+            if let Card::Land(land) = card {
+                // Return any non-basic land
+                if land.subtype != crate::card::LandSubtype::Basic {
+                    return Some(idx);
+                }
+            }
+        }
+
+        // Priority 5: Basic lands (if we really need mana)
+        for (idx, card) in milled.iter().enumerate() {
+            if matches!(card, Card::Land(_)) {
+                return Some(idx);
+            }
+        }
+
+        // Priority 6: Other creatures (but not Bringer/Terror - they're better in graveyard)
+        for (idx, card) in milled.iter().enumerate() {
             if matches!(card, Card::Creature(_))
                 && card.name() != "Bringer of the Last Gift"
                 && card.name() != "Terror of the Peaks"
