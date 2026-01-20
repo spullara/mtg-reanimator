@@ -1,4 +1,4 @@
-use crate::card::{Card, CreatureCard, ManaCost, ManaColor};
+use crate::card::{Card, ColorFlags, CreatureCard, ManaCost, ManaColor};
 use crate::game::state::GameState;
 use crate::game::zones::Permanent;
 
@@ -146,20 +146,21 @@ impl Default for ManaPool {
     }
 }
 
-/// Get the colors a land can tap for
+/// Get the colors a land can tap for as bitflags (no allocations)
 /// Handles special lands like Cavern of Souls, Verge lands, Starting Town
+#[inline]
 pub fn can_tap_for_mana(
     permanent: &Permanent,
     state: &GameState,
     for_creature: Option<&CreatureCard>,
-) -> Vec<ManaColor> {
+) -> ColorFlags {
     if permanent.tapped {
-        return Vec::new();
+        return ColorFlags::new();
     }
 
     let land = match &permanent.card {
         Card::Land(l) => l,
-        _ => return Vec::new(),
+        _ => return ColorFlags::new(),
     };
 
     // Handle Cavern of Souls - colored mana ONLY for creatures of chosen type
@@ -169,18 +170,14 @@ pub fn can_tap_for_mana(
         if let (Some(creature), Some(chosen_type)) = (for_creature, &permanent.chosen_type) {
             if creature_matches_cavern_type(creature, chosen_type) {
                 // Creature matches! Can produce any color
-                return vec![
-                    ManaColor::White,
-                    ManaColor::Blue,
-                    ManaColor::Black,
-                    ManaColor::Red,
-                    ManaColor::Green,
-                    ManaColor::Colorless,
-                ];
+                return ColorFlags(
+                    ColorFlags::WHITE | ColorFlags::BLUE | ColorFlags::BLACK |
+                    ColorFlags::RED | ColorFlags::GREEN | ColorFlags::COLORLESS
+                );
             }
         }
         // No creature context or creature doesn't match - only colorless
-        return vec![ManaColor::Colorless];
+        return ColorFlags(ColorFlags::COLORLESS);
     }
 
     // Handle Wastewood Verge - {B} only if controlling Swamp/Forest
@@ -204,9 +201,9 @@ pub fn can_tap_for_mana(
                 }
             });
         if has_swamp_or_forest {
-            return vec![ManaColor::Green, ManaColor::Black];
+            return ColorFlags(ColorFlags::GREEN | ColorFlags::BLACK);
         }
-        return vec![ManaColor::Green];
+        return ColorFlags(ColorFlags::GREEN);
     }
 
     // Handle Gloomlake Verge - {B} only if controlling Island/Swamp
@@ -226,16 +223,18 @@ pub fn can_tap_for_mana(
                 }
             });
         if has_island_or_swamp {
-            return vec![ManaColor::Blue, ManaColor::Black];
+            return ColorFlags(ColorFlags::BLUE | ColorFlags::BLACK);
         }
-        return vec![ManaColor::Blue];
+        return ColorFlags(ColorFlags::BLUE);
     }
 
     // Handle Multiversal Passage - produces chosen color
     if land.base.name == "Multiversal Passage" {
         if let Some(chosen_type) = &permanent.chosen_basic_type {
             if let Ok(color) = parse_mana_color(chosen_type) {
-                return vec![color];
+                let mut flags = ColorFlags::new();
+                flags.insert(color);
+                return flags;
             }
         }
     }
@@ -244,21 +243,21 @@ pub fn can_tap_for_mana(
     if land.base.name == "Starting Town" {
         if state.life > 1 {
             // Can pay 1 life for any color
-            return vec![
-                ManaColor::Colorless,
-                ManaColor::White,
-                ManaColor::Blue,
-                ManaColor::Black,
-                ManaColor::Red,
-                ManaColor::Green,
-            ];
+            return ColorFlags(
+                ColorFlags::COLORLESS | ColorFlags::WHITE | ColorFlags::BLUE |
+                ColorFlags::BLACK | ColorFlags::RED | ColorFlags::GREEN
+            );
         }
         // Only colorless if we can't afford the life
-        return vec![ManaColor::Colorless];
+        return ColorFlags(ColorFlags::COLORLESS);
     }
 
     // Return land colors for other lands
-    land.colors.clone()
+    let mut flags = ColorFlags::new();
+    for color in &land.colors {
+        flags.insert(*color);
+    }
+    flags
 }
 
 /// Check if a creature matches a Cavern of Souls chosen type
@@ -311,16 +310,12 @@ pub fn can_afford_cost(
             continue;
         }
         let colors = can_tap_for_mana(permanent, state, for_creature);
-        for color in colors {
-            match color {
-                ManaColor::White => color_counts.white += 1,
-                ManaColor::Blue => color_counts.blue += 1,
-                ManaColor::Black => color_counts.black += 1,
-                ManaColor::Red => color_counts.red += 1,
-                ManaColor::Green => color_counts.green += 1,
-                ManaColor::Colorless => color_counts.colorless += 1,
-            }
-        }
+        if colors.has_white() { color_counts.white += 1; }
+        if colors.has_blue() { color_counts.blue += 1; }
+        if colors.has_black() { color_counts.black += 1; }
+        if colors.has_red() { color_counts.red += 1; }
+        if colors.has_green() { color_counts.green += 1; }
+        if colors.has_colorless() { color_counts.colorless += 1; }
     }
 
     // Check colored requirements
@@ -381,8 +376,8 @@ pub fn tap_lands_for_cost(
     }
 
     // Collect all land info FIRST (before any mutations)
-    // Each entry is (index, colors_this_land_produces)
-    let land_info: Vec<(usize, Vec<ManaColor>)> = state.battlefield.permanents()
+    // Each entry is (index, colors_this_land_produces as bitflags)
+    let land_info: Vec<(usize, ColorFlags)> = state.battlefield.permanents()
         .iter()
         .enumerate()
         .filter_map(|(idx, p)| {
@@ -422,7 +417,7 @@ pub fn tap_lands_for_cost(
             if used_indices.contains(idx) {
                 continue;
             }
-            if colors.len() == 1 && colors[0] == *color {
+            if colors.is_single_color() && colors.contains(*color) {
                 lands_to_tap.push((*idx, color.to_char()));
                 used_indices.insert(*idx);
                 remaining -= 1;
@@ -438,7 +433,7 @@ pub fn tap_lands_for_cost(
                 if used_indices.contains(idx) {
                     continue;
                 }
-                if colors.contains(color) {
+                if colors.contains(*color) {
                     lands_to_tap.push((*idx, color.to_char()));
                     used_indices.insert(*idx);
                     remaining -= 1;
@@ -461,8 +456,8 @@ pub fn tap_lands_for_cost(
         if used_indices.contains(idx) {
             continue;
         }
-        if !colors.is_empty() {
-            lands_to_tap.push((*idx, colors[0].to_char()));
+        if let Some(first) = colors.first_color() {
+            lands_to_tap.push((*idx, first.to_char()));
             used_indices.insert(*idx);
             generic_remaining -= 1;
         }

@@ -9,7 +9,7 @@ pub use abilities::{
 };
 pub use database::{CardDatabase, CardDatabaseError};
 pub use types::{
-    BaseCard, Card, CardType, CreatureCard, LandCard, LandSubtype, ManaCost, ManaColor, SagaCard,
-    SpellCard,
+    BaseCard, Card, CardType, ColorFlags, CreatureCard, LandCard, LandSubtype, ManaCost, ManaColor,
+    SagaCard, SpellCard,
 };
 

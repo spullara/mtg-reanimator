@@ -1,4 +1,4 @@
-use crate::card::{Card, CardDatabase, CardType, CreatureCard, LandSubtype, ManaCost, ManaColor};
+use crate::card::{Card, CardDatabase, CardType, ColorFlags, CreatureCard, LandSubtype, ManaCost, ManaColor};
 use crate::game::mana::{can_afford_cost, can_tap_for_mana, ManaPool};
 use crate::game::state::GameState;
 use crate::game::zones::{CounterType, Permanent};
@@ -299,9 +299,9 @@ pub fn tap_land_for_mana(permanent: &Permanent, mana_pool: &mut ManaPool) -> Res
 pub fn tap_land_for_color_cost(
     permanent: &Permanent,
     color: ManaColor,
-    available_colors: &[ManaColor],
+    available_colors: ColorFlags,
 ) -> Option<u32> {
-    if !available_colors.contains(&color) {
+    if !available_colors.contains(color) {
         return None;
     }
 
@@ -325,8 +325,8 @@ pub fn tap_lands_for_cost(
     state: &mut GameState,
     for_creature: Option<&CreatureCard>,
 ) -> bool {
-    // Get list of untapped lands with their available colors
-    let land_info: Vec<(usize, Vec<ManaColor>)> = state
+    // Get list of untapped lands with their available colors (as bitflags)
+    let land_info: Vec<(usize, ColorFlags)> = state
         .battlefield
         .permanents()
         .iter()
@@ -336,16 +336,17 @@ pub fn tap_lands_for_cost(
         .collect();
 
     // Pay colored costs first
-    let color_requirements = vec![
-        (ManaColor::White, cost.white),
-        (ManaColor::Blue, cost.blue),
-        (ManaColor::Black, cost.black),
-        (ManaColor::Red, cost.red),
-        (ManaColor::Green, cost.green),
-        (ManaColor::Colorless, cost.colorless),
+    const COLOR_REQUIREMENTS: [(ManaColor, fn(&ManaCost) -> u32); 6] = [
+        (ManaColor::White, |c| c.white),
+        (ManaColor::Blue, |c| c.blue),
+        (ManaColor::Black, |c| c.black),
+        (ManaColor::Red, |c| c.red),
+        (ManaColor::Green, |c| c.green),
+        (ManaColor::Colorless, |c| c.colorless),
     ];
 
-    for (color, amount) in color_requirements {
+    for (color, get_amount) in COLOR_REQUIREMENTS {
+        let amount = get_amount(cost);
         if amount == 0 {
             continue;
         }
@@ -360,22 +361,15 @@ pub fn tap_lands_for_cost(
             if state.battlefield.permanents()[*idx].tapped {
                 continue;
             }
-            if colors.len() == 1 && colors[0] == color {
+            if colors.is_single_color() && colors.contains(color) {
                 // This land only produces this color - use it
-                if let Some(life_cost) = tap_land_for_color_cost(&state.battlefield.permanents()[*idx], color, colors) {
+                if let Some(life_cost) = tap_land_for_color_cost(&state.battlefield.permanents()[*idx], color, *colors) {
                     if life_cost > 0 && state.life <= 1 {
                         continue; // Can't afford the life cost
                     }
                     state.life -= life_cost as i32;
                     state.battlefield.permanents_mut()[*idx].tapped = true;
-                    match color {
-                        ManaColor::White => state.mana_pool.add_mana('W', 1),
-                        ManaColor::Blue => state.mana_pool.add_mana('U', 1),
-                        ManaColor::Black => state.mana_pool.add_mana('B', 1),
-                        ManaColor::Red => state.mana_pool.add_mana('R', 1),
-                        ManaColor::Green => state.mana_pool.add_mana('G', 1),
-                        ManaColor::Colorless => state.mana_pool.add_mana('C', 1),
-                    }
+                    state.mana_pool.add_mana(color.to_char(), 1);
                     remaining -= 1;
                 }
             }
@@ -390,21 +384,14 @@ pub fn tap_lands_for_cost(
                 if state.battlefield.permanents()[*idx].tapped {
                     continue;
                 }
-                if colors.contains(&color) {
-                    if let Some(life_cost) = tap_land_for_color_cost(&state.battlefield.permanents()[*idx], color, colors) {
+                if colors.contains(color) {
+                    if let Some(life_cost) = tap_land_for_color_cost(&state.battlefield.permanents()[*idx], color, *colors) {
                         if life_cost > 0 && state.life <= 1 {
                             continue; // Can't afford the life cost
                         }
                         state.life -= life_cost as i32;
                         state.battlefield.permanents_mut()[*idx].tapped = true;
-                        match color {
-                            ManaColor::White => state.mana_pool.add_mana('W', 1),
-                            ManaColor::Blue => state.mana_pool.add_mana('U', 1),
-                            ManaColor::Black => state.mana_pool.add_mana('B', 1),
-                            ManaColor::Red => state.mana_pool.add_mana('R', 1),
-                            ManaColor::Green => state.mana_pool.add_mana('G', 1),
-                            ManaColor::Colorless => state.mana_pool.add_mana('C', 1),
-                        }
+                        state.mana_pool.add_mana(color.to_char(), 1);
                         remaining -= 1;
                     }
                 }
@@ -425,21 +412,14 @@ pub fn tap_lands_for_cost(
         if state.battlefield.permanents()[*idx].tapped {
             continue;
         }
-        if !colors.is_empty() {
-            if let Some(life_cost) = tap_land_for_color_cost(&state.battlefield.permanents()[*idx], colors[0], colors) {
+        if let Some(first_color) = colors.first_color() {
+            if let Some(life_cost) = tap_land_for_color_cost(&state.battlefield.permanents()[*idx], first_color, *colors) {
                 if life_cost > 0 && state.life <= 1 {
                     continue; // Can't afford the life cost
                 }
                 state.life -= life_cost as i32;
                 state.battlefield.permanents_mut()[*idx].tapped = true;
-                match colors[0] {
-                    ManaColor::White => state.mana_pool.add_mana('W', 1),
-                    ManaColor::Blue => state.mana_pool.add_mana('U', 1),
-                    ManaColor::Black => state.mana_pool.add_mana('B', 1),
-                    ManaColor::Red => state.mana_pool.add_mana('R', 1),
-                    ManaColor::Green => state.mana_pool.add_mana('G', 1),
-                    ManaColor::Colorless => state.mana_pool.add_mana('C', 1),
-                }
+                state.mana_pool.add_mana(first_color.to_char(), 1);
                 generic_remaining -= 1;
             }
         }

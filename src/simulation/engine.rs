@@ -1,4 +1,4 @@
-use crate::card::{Card, CardDatabase, LandCard, LandSubtype, ManaColor};
+use crate::card::{Card, CardDatabase, ColorFlags, LandCard, LandSubtype, ManaColor};
 use crate::game::state::GameState;
 use crate::game::turns::{start_turn, draw_phase, upkeep_phase, end_phase};
 use crate::game::cards;
@@ -33,27 +33,16 @@ pub fn check_win_condition(state: &GameState) -> bool {
     state.opponent_life <= 0
 }
 
-/// Get available mana colors from battlefield lands
-fn get_available_colors(state: &GameState) -> std::collections::HashSet<String> {
-    let mut colors = std::collections::HashSet::new();
+/// Get available mana colors from battlefield lands as bitflags (no allocations)
+#[inline]
+fn get_available_colors(state: &GameState) -> ColorFlags {
+    let mut colors = ColorFlags::new();
 
     for permanent in state.battlefield.permanents() {
-        match &permanent.card {
-            Card::Land(land) => {
-                // Add colors this land can produce
-                for color in &land.colors {
-                    let color_str = match color {
-                        crate::card::ManaColor::White => "W".to_string(),
-                        crate::card::ManaColor::Blue => "U".to_string(),
-                        crate::card::ManaColor::Black => "B".to_string(),
-                        crate::card::ManaColor::Red => "R".to_string(),
-                        crate::card::ManaColor::Green => "G".to_string(),
-                        crate::card::ManaColor::Colorless => "C".to_string(),
-                    };
-                    colors.insert(color_str);
-                }
+        if let Card::Land(land) = &permanent.card {
+            for color in &land.colors {
+                colors.insert(*color);
             }
-            _ => {}
         }
     }
 
@@ -331,7 +320,7 @@ pub fn main_phase(state: &mut GameState, db: &CardDatabase, verbose: bool) {
             cast_any = false;
 
             // Land-finding spells (from TypeScript LAND_FINDING_SPELLS)
-            let land_finders = vec![
+            const LAND_FINDERS: &[&str] = &[
                 "Cache Grab",
                 "Dredger's Insight",
                 "Town Greeter",
@@ -342,7 +331,7 @@ pub fn main_phase(state: &mut GameState, db: &CardDatabase, verbose: bool) {
                 .iter()
                 .enumerate()
                 .filter(|(_, c)| {
-                    land_finders.contains(&c.name()) && mana::can_cast_spell(c, state)
+                    LAND_FINDERS.contains(&c.name()) && mana::can_cast_spell(c, state)
                 })
                 .collect();
 
@@ -701,16 +690,16 @@ pub fn run_game(
         
         // Track when colors become available
         let colors = get_available_colors(&state);
-        if turn_with_u.is_none() && colors.contains("U") {
+        if turn_with_u.is_none() && colors.has_blue() {
             turn_with_u = Some(state.turn);
         }
-        if turn_with_b.is_none() && colors.contains("B") {
+        if turn_with_b.is_none() && colors.has_black() {
             turn_with_b = Some(state.turn);
         }
-        if turn_with_g.is_none() && colors.contains("G") {
+        if turn_with_g.is_none() && colors.has_green() {
             turn_with_g = Some(state.turn);
         }
-        if turn_with_ubg.is_none() && colors.contains("U") && colors.contains("B") && colors.contains("G") {
+        if turn_with_ubg.is_none() && colors.has_blue() && colors.has_black() && colors.has_green() {
             turn_with_ubg = Some(state.turn);
         }
     }
@@ -783,8 +772,7 @@ mod tests {
         state.battlefield.add_permanent(permanent);
 
         let colors = get_available_colors(&state);
-        assert!(colors.contains("G"));
-        assert_eq!(colors.len(), 1);
+        assert!(colors.has_green());
     }
 
     #[test]

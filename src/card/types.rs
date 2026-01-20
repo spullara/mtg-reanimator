@@ -29,6 +29,113 @@ impl ManaColor {
             ManaColor::Colorless => 'C',
         }
     }
+
+    /// Convert to a bit flag
+    #[inline]
+    pub const fn to_flag(&self) -> u8 {
+        match self {
+            ManaColor::White => ColorFlags::WHITE,
+            ManaColor::Blue => ColorFlags::BLUE,
+            ManaColor::Black => ColorFlags::BLACK,
+            ManaColor::Red => ColorFlags::RED,
+            ManaColor::Green => ColorFlags::GREEN,
+            ManaColor::Colorless => ColorFlags::COLORLESS,
+        }
+    }
+}
+
+/// Bitflag representation of mana colors for fast operations
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub struct ColorFlags(pub u8);
+
+impl ColorFlags {
+    pub const NONE: u8 = 0;
+    pub const WHITE: u8 = 1 << 0;
+    pub const BLUE: u8 = 1 << 1;
+    pub const BLACK: u8 = 1 << 2;
+    pub const RED: u8 = 1 << 3;
+    pub const GREEN: u8 = 1 << 4;
+    pub const COLORLESS: u8 = 1 << 5;
+
+    #[inline]
+    pub const fn new() -> Self {
+        ColorFlags(0)
+    }
+
+    #[inline]
+    pub fn insert(&mut self, color: ManaColor) {
+        self.0 |= color.to_flag();
+    }
+
+    #[inline]
+    pub const fn contains_flag(&self, flag: u8) -> bool {
+        (self.0 & flag) != 0
+    }
+
+    #[inline]
+    pub const fn has_white(&self) -> bool {
+        self.contains_flag(Self::WHITE)
+    }
+
+    #[inline]
+    pub const fn has_blue(&self) -> bool {
+        self.contains_flag(Self::BLUE)
+    }
+
+    #[inline]
+    pub const fn has_black(&self) -> bool {
+        self.contains_flag(Self::BLACK)
+    }
+
+    #[inline]
+    pub const fn has_red(&self) -> bool {
+        self.contains_flag(Self::RED)
+    }
+
+    #[inline]
+    pub const fn has_green(&self) -> bool {
+        self.contains_flag(Self::GREEN)
+    }
+
+    #[inline]
+    pub const fn has_colorless(&self) -> bool {
+        self.contains_flag(Self::COLORLESS)
+    }
+
+    #[inline]
+    pub const fn is_empty(&self) -> bool {
+        self.0 == 0
+    }
+
+    /// Count how many colors are set
+    #[inline]
+    pub const fn count(&self) -> u32 {
+        self.0.count_ones()
+    }
+
+    /// Check if exactly one color is set
+    #[inline]
+    pub const fn is_single_color(&self) -> bool {
+        self.count() == 1
+    }
+
+    /// Check if a specific ManaColor is present
+    #[inline]
+    pub fn contains(&self, color: ManaColor) -> bool {
+        self.contains_flag(color.to_flag())
+    }
+
+    /// Get the first (any) color that's set, for generic mana payment
+    #[inline]
+    pub fn first_color(&self) -> Option<ManaColor> {
+        if self.has_white() { return Some(ManaColor::White); }
+        if self.has_blue() { return Some(ManaColor::Blue); }
+        if self.has_black() { return Some(ManaColor::Black); }
+        if self.has_red() { return Some(ManaColor::Red); }
+        if self.has_green() { return Some(ManaColor::Green); }
+        if self.has_colorless() { return Some(ManaColor::Colorless); }
+        None
+    }
 }
 
 /// Mana cost for a card
