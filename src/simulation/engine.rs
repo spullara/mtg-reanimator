@@ -219,7 +219,7 @@ pub fn main_phase(state: &mut GameState, db: &CardDatabase, verbose: bool) {
         }) {
             if let Some(untapped_land) = state.hand.remove_card(untapped_land_idx) {
                 let land_name = untapped_land.name().to_string();
-                let _ = cards::play_land(state, &untapped_land);
+                let _ = cards::play_land(state, &untapped_land, verbose);
                 if verbose {
                     println!("  [COMBO SETUP] Played {} first to enable turn 4 combo", land_name);
                 }
@@ -371,7 +371,7 @@ pub fn main_phase(state: &mut GameState, db: &CardDatabase, verbose: bool) {
                                 state.battlefield.permanents_mut()[perm_idx] = perm;
                             }
                         } else {
-                            let _ = cards::cast_spell(state, &card, db);
+                            let _ = cards::cast_spell(state, &card, db, verbose);
                         }
 
                         if verbose {
@@ -407,7 +407,7 @@ pub fn main_phase(state: &mut GameState, db: &CardDatabase, verbose: bool) {
             if let Some(land_idx) = DecisionEngine::choose_land_to_play(&hand_cards, state) {
                 if let Some(card) = state.hand.remove_card(land_idx) {
                     let card_name = card.name().to_string();
-                    let _ = cards::play_land(state, &card);
+                    let _ = cards::play_land(state, &card, verbose);
 
                     // DO NOT tap the land here - TypeScript taps lands DURING casting
                     // This allows can_cast_spell to correctly see the new untapped land
@@ -550,18 +550,34 @@ pub fn main_phase(state: &mut GameState, db: &CardDatabase, verbose: bool) {
 
             if let Some(card) = state.hand.remove_card(spell_idx) {
                 let card_name = card.name().to_string();
-                let cost = get_mana_cost(&card);
 
-                // Get for_creature for Cavern of Souls handling
+                // Get for_creature for Cavern of Souls handling and impending check
                 let for_creature = match &card {
                     Card::Creature(c) => Some(c),
                     _ => None,
                 };
 
-                if mana::tap_lands_for_cost(cost, state, for_creature) {
+                // Determine if we should use impending cost
+                // For creatures with impending, prefer impending (it's cheaper and triggers immediately)
+                let (use_impending, cost) = if let Some(creature) = for_creature {
+                    if let Some(impending_cost) = &creature.impending_cost {
+                        // Prefer impending when we can afford it
+                        if mana::can_afford_cost(impending_cost, state, for_creature) {
+                            (true, impending_cost.clone())
+                        } else {
+                            (false, get_mana_cost(&card).clone())
+                        }
+                    } else {
+                        (false, get_mana_cost(&card).clone())
+                    }
+                } else {
+                    (false, get_mana_cost(&card).clone())
+                };
+
+                if mana::tap_lands_for_cost(&cost, state, for_creature) {
                     match &card {
                         Card::Creature(_) => {
-                            let _ = cards::cast_creature(state, &card, false);
+                            let _ = cards::cast_creature(state, &card, use_impending);
 
                             // Process ETB triggers
                             let perm_idx = state.battlefield.permanents().len().saturating_sub(1);
@@ -572,17 +588,21 @@ pub fn main_phase(state: &mut GameState, db: &CardDatabase, verbose: bool) {
                             }
 
                             if verbose {
-                                println!("  [Cast] {}", card_name);
+                                if use_impending {
+                                    println!("  [Cast] {} (impending)", card_name);
+                                } else {
+                                    println!("  [Cast] {}", card_name);
+                                }
                             }
                         }
                         Card::Land(_) => {
-                            let _ = cards::play_land(state, &card);
+                            let _ = cards::play_land(state, &card, verbose);
                             if verbose {
                                 println!("  [Land] {}", card_name);
                             }
                         }
                         Card::Instant(_) | Card::Sorcery(_) | Card::Enchantment(_) | Card::Saga(_) => {
-                            let _ = cards::cast_spell(state, &card, db);
+                            let _ = cards::cast_spell(state, &card, db, verbose);
                             if verbose {
                                 println!("  [Cast] {}", card_name);
                             }

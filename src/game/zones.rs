@@ -115,6 +115,14 @@ impl Library {
         let mut rng = rand::thread_rng();
         self.cards.shuffle(&mut rng);
     }
+
+    pub fn cards(&self) -> &[Card] {
+        &self.cards
+    }
+
+    pub fn cards_mut(&mut self) -> &mut Vec<Card> {
+        &mut self.cards
+    }
 }
 
 /// Hand - cards in hand

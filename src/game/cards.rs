@@ -61,7 +61,7 @@ pub fn can_cast_with_untapped_lands(card: &Card, state: &GameState) -> bool {
 }
 
 /// Play a land from hand to battlefield with proper tapping logic
-pub fn play_land(state: &mut GameState, card: &Card) -> Result<(), String> {
+pub fn play_land(state: &mut GameState, card: &Card, verbose: bool) -> Result<(), String> {
     let land = match card {
         Card::Land(l) => l,
         _ => return Err("Not a land card".to_string()),
@@ -104,7 +104,7 @@ pub fn play_land(state: &mut GameState, card: &Card) -> Result<(), String> {
 
     // Handle surveil lands
     if land.has_surveil && land.surveil_amount > 0 {
-        resolve_surveil(state, land.surveil_amount as usize, false);
+        resolve_surveil(state, land.surveil_amount as usize, verbose);
     }
 
     state.battlefield.add_permanent(permanent);
@@ -424,6 +424,7 @@ pub fn cast_spell(
     state: &mut GameState,
     card: &Card,
     _db: &CardDatabase,
+    verbose: bool,
 ) -> Result<(), String> {
     match card {
         Card::Instant(spell) | Card::Sorcery(spell) => {
@@ -431,19 +432,207 @@ pub fn cast_spell(
             for ability in &spell.abilities {
                 match ability.as_str() {
                     "mill_4_return_permanent" => {
-                        // Cache Grab: mill 4, return permanent
+                        // Cache Grab: mill 4, return permanent to hand
                         let milled = state.library.mill(4);
+                        let mut milled_cards: Vec<Card> = Vec::new();
                         for card in milled {
-                            state.graveyard.add_card(card);
+                            milled_cards.push(card);
+                        }
+
+                        if verbose {
+                            let names: Vec<&str> = milled_cards.iter().map(|c| c.name()).collect();
+                            println!("    Mill 4: {}", names.join(", "));
+                        }
+
+                        // Filter to permanents only (not instant/sorcery)
+                        let permanents: Vec<&Card> = milled_cards.iter()
+                            .filter(|c| !matches!(c, Card::Instant(_) | Card::Sorcery(_)))
+                            .collect();
+
+                        // Choose best card to return using decision engine
+                        let selected = if !permanents.is_empty() {
+                            DecisionEngine::select_best_from_mill(&milled_cards, state)
+                        } else {
+                            None
+                        };
+
+                        // Return selected card to hand, rest to graveyard
+                        let mut selected_name = selected.map(|c| c.name().to_string());
+                        for card in milled_cards {
+                            if Some(card.name().to_string()) == selected_name {
+                                if verbose {
+                                    println!("    -> Returned to hand: {}", card.name());
+                                }
+                                state.hand.add_card(card);
+                                // Clear selected_name so we only return one copy
+                                selected_name = None;
+                            } else {
+                                state.graveyard.add_card(card);
+                            }
                         }
                     }
                     "search_land_or_creature_with_evidence" => {
-                        // Analyze the Pollen: evidence 8, search
-                        // Simplified: just mill to represent searching
+                        // Analyze the Pollen: evidence 8 (total mana value), search for creature/land
+                        // NEVER exile: Terror, Bringer (combo pieces), lands (MV 0, don't help)
+                        let never_exile = ["Terror of the Peaks", "Bringer of the Last Gift"];
+
+                        // Collect exilable cards with their indices and info
+                        let exilable_cards: Vec<(usize, String, i32, &Card)> = state.graveyard.cards()
+                            .iter()
+                            .enumerate()
+                            .filter(|(_, c)| {
+                                !matches!(c, Card::Land(_)) && !never_exile.contains(&c.name())
+                            })
+                            .map(|(i, c)| (i, c.name().to_string(), c.mana_value() as i32, c))
+                            .collect();
+
+                        // Calculate total exilable MV
+                        let exilable_mv: i32 = exilable_cards.iter().map(|(_, _, mv, _)| mv).sum();
+                        let can_collect_evidence = exilable_mv >= 8;
+
+                        if can_collect_evidence {
+                            // Sort by what we want to exile
+                            // Priority: Spells > Enchantments > Creatures (minimize creature exile)
+                            let mut sorted_exilable = exilable_cards.clone();
+                            sorted_exilable.sort_by(|a, b| {
+                                let type_order = |c: &Card| -> i32 {
+                                    match c {
+                                        Card::Instant(_) | Card::Sorcery(_) => 0,
+                                        Card::Enchantment(_) | Card::Saga(_) => 1,
+                                        Card::Creature(_) => 2,
+                                        _ => 3,
+                                    }
+                                };
+                                let order_diff = type_order(a.3).cmp(&type_order(b.3));
+                                if order_diff != std::cmp::Ordering::Equal {
+                                    return order_diff;
+                                }
+                                // Within same type, prefer higher MV to reach 8 faster
+                                b.2.cmp(&a.2)
+                            });
+
+                            // Collect evidence - exile cards totaling 8+ MV
+                            let mut evidence_mv = 0;
+                            let mut to_exile: Vec<(usize, String)> = Vec::new();
+
+                            for (idx, name, mv, _) in &sorted_exilable {
+                                if evidence_mv >= 8 {
+                                    break;
+                                }
+                                to_exile.push((*idx, name.clone()));
+                                evidence_mv += mv;
+                            }
+
+                            // Sort indices in reverse order so we can remove from highest to lowest
+                            to_exile.sort_by(|a, b| b.0.cmp(&a.0));
+
+                            let exiled_names: Vec<String> = to_exile.iter().map(|(_, n)| n.clone()).collect();
+
+                            for (idx, _) in &to_exile {
+                                if let Some(card) = state.graveyard.remove_card(*idx) {
+                                    state.add_to_exile(card);
+                                }
+                            }
+
+                            if verbose {
+                                println!("    Evidence collected ({} MV exiled: {})",
+                                    evidence_mv, exiled_names.join(", "));
+                            }
+
+                            // Search for creature or land
+                            // Priority: Spider-Man (if needed) > Kiora > land
+                            let has_spider_man = state.hand.cards().iter()
+                                .any(|c| c.name() == "Superior Spider-Man");
+                            let has_bringer_in_gy = state.graveyard.cards().iter()
+                                .any(|c| c.name() == "Bringer of the Last Gift");
+
+                            let mut found_idx: Option<usize> = None;
+
+                            // Search for Spider-Man if we need it
+                            if !has_spider_man && has_bringer_in_gy {
+                                for (i, card) in state.library.cards().iter().enumerate() {
+                                    if card.name() == "Superior Spider-Man" {
+                                        found_idx = Some(i);
+                                        break;
+                                    }
+                                }
+                            }
+
+                            // Search for Kiora
+                            if found_idx.is_none() {
+                                for (i, card) in state.library.cards().iter().enumerate() {
+                                    if card.name() == "Kiora, the Rising Tide" {
+                                        found_idx = Some(i);
+                                        break;
+                                    }
+                                }
+                            }
+
+                            // Search for a land
+                            if found_idx.is_none() {
+                                for (i, card) in state.library.cards().iter().enumerate() {
+                                    if matches!(card, Card::Land(_)) {
+                                        found_idx = Some(i);
+                                        break;
+                                    }
+                                }
+                            }
+
+                            if let Some(idx) = found_idx {
+                                let library_cards = state.library.cards_mut();
+                                if idx < library_cards.len() {
+                                    let target = library_cards.remove(idx);
+                                    if verbose {
+                                        println!("    -> Searched for: {}", target.name());
+                                    }
+                                    state.hand.add_card(target);
+                                    // Shuffle library (uses thread_rng, not game RNG)
+                                    state.library.shuffle();
+                                }
+                            }
+                        } else {
+                            // No evidence - just search for basic land
+                            let graveyard_mv: u32 = state.graveyard.cards().iter()
+                                .map(|c| c.mana_value())
+                                .sum();
+                            if verbose {
+                                println!("    No evidence (graveyard MV: {}/8)", graveyard_mv);
+                            }
+
+                            // Find a basic land in library
+                            let mut found_idx: Option<usize> = None;
+                            for (i, card) in state.library.cards().iter().enumerate() {
+                                if let Card::Land(land) = card {
+                                    if land.subtype == LandSubtype::Basic {
+                                        found_idx = Some(i);
+                                        break;
+                                    }
+                                }
+                            }
+
+                            if let Some(idx) = found_idx {
+                                let library_cards = state.library.cards_mut();
+                                if idx < library_cards.len() {
+                                    let target = library_cards.remove(idx);
+                                    if verbose {
+                                        println!("    -> Searched for basic land: {}", target.name());
+                                    }
+                                    state.hand.add_card(target);
+                                    // Shuffle library (uses thread_rng, not game RNG)
+                                    state.library.shuffle();
+                                }
+                            } else {
+                                if verbose {
+                                    println!("    -> No basic land found in library");
+                                }
+                            }
+                        }
                     }
                     _ => {}
                 }
             }
+            // Instant/Sorcery goes to graveyard after resolution
+            state.graveyard.add_card(card.clone());
             Ok(())
         }
         Card::Enchantment(spell) => {
@@ -635,8 +824,8 @@ pub fn process_etb_triggers_verbose(
                 resolve_kiora_etb(state, verbose);
             }
             "impending_5" => {
-                // Overlord: enters with 5 time counters
-                permanent.add_counter(CounterType::Time, 5);
+                // Impending counters are already added by cast_creature when use_impending=true
+                // This ability is just a marker - no action needed here
             }
             "etb_damage_trigger" => {
                 // Terror of the Peaks: damage trigger (setup, actual damage on creature ETB)
@@ -657,10 +846,79 @@ pub fn process_etb_triggers_verbose(
                 state.graveyard.clear_creatures();
             }
             "etb_or_attack_mill_4_return" => {
-                // Overlord of the Balemurk: mill 4, return creature or land
+                // Overlord of the Balemurk: mill 4, may return non-Avatar creature or land
+                // BUT we usually DON'T want to return creatures - we want them in graveyard for reanimate!
                 let milled = state.library.mill(4);
-                for card in milled {
-                    state.graveyard.add_card(card);
+
+                if verbose {
+                    let mill_names: Vec<String> = milled.iter().map(|c| c.name().to_string()).collect();
+                    println!("    Mill 4: {}", mill_names.join(", "));
+                }
+
+                // Check game state for selection logic
+                let has_bringer_in_gy = state.graveyard.cards().iter()
+                    .any(|c| c.name() == "Bringer of the Last Gift");
+                let has_spider_in_hand = state.hand.cards().iter()
+                    .any(|c| c.name() == "Superior Spider-Man");
+                let has_bringer_in_hand = state.hand.cards().iter()
+                    .any(|c| c.name() == "Bringer of the Last Gift");
+                let land_count = state.battlefield.permanents().iter()
+                    .filter(|p| matches!(p.card, Card::Land(_)))
+                    .count();
+
+                let mut selected_idx: Option<usize> = None;
+
+                // Priority 1: Spider-Man if we need it for the combo
+                if has_bringer_in_gy && !has_spider_in_hand {
+                    for (idx, card) in milled.iter().enumerate() {
+                        if card.name() == "Superior Spider-Man" {
+                            selected_idx = Some(idx);
+                            if verbose {
+                                println!("    Overlord returns Superior Spider-Man (combo piece!)");
+                            }
+                            break;
+                        }
+                    }
+                }
+
+                // Priority 2: Kiora if Bringer is stuck in hand
+                if selected_idx.is_none() && has_bringer_in_hand {
+                    for (idx, card) in milled.iter().enumerate() {
+                        if card.name() == "Kiora, the Rising Tide" {
+                            selected_idx = Some(idx);
+                            if verbose {
+                                println!("    Overlord returns Kiora (need to discard Bringer from hand)");
+                            }
+                            break;
+                        }
+                    }
+                }
+
+                // Priority 3: Town Greeter if early game
+                if selected_idx.is_none() && land_count < 4 {
+                    for (idx, card) in milled.iter().enumerate() {
+                        if card.name() == "Town Greeter" {
+                            selected_idx = Some(idx);
+                            if verbose {
+                                println!("    Overlord returns Town Greeter (cheap enabler)");
+                            }
+                            break;
+                        }
+                    }
+                }
+
+                // Otherwise: DON'T return anything! Leave creatures in graveyard for reanimation
+                if selected_idx.is_none() && verbose {
+                    println!("    Overlord returns nothing (keeping creatures for reanimate)");
+                }
+
+                // Add cards to graveyard or hand
+                for (idx, card) in milled.into_iter().enumerate() {
+                    if Some(idx) == selected_idx {
+                        state.hand.add_card(card);
+                    } else {
+                        state.graveyard.add_card(card);
+                    }
                 }
             }
             "mind_swap_copy" => {
@@ -1004,7 +1262,7 @@ mod tests {
             surveil_amount: 0,
         });
 
-        let result = play_land(&mut state, &land);
+        let result = play_land(&mut state, &land, false);
         assert!(result.is_ok());
         assert_eq!(state.battlefield.size(), 1);
         assert!(!state.battlefield.permanents()[0].tapped);
@@ -1026,7 +1284,7 @@ mod tests {
             surveil_amount: 0,
         });
 
-        let result = play_land(&mut state, &fastland);
+        let result = play_land(&mut state, &fastland, false);
         assert!(result.is_ok());
         assert!(!state.battlefield.permanents()[0].tapped);
     }
@@ -1066,7 +1324,7 @@ mod tests {
             surveil_amount: 0,
         });
 
-        let result = play_land(&mut state, &fastland);
+        let result = play_land(&mut state, &fastland, false);
         assert!(result.is_ok());
         assert!(state.battlefield.permanents()[3].tapped);
     }

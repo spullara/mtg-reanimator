@@ -45,6 +45,8 @@ impl DecisionEngine {
         _db: &CardDatabase,
     ) -> Option<usize> {
         // Filter castable spells
+        // NOTE: Use can_cast_spell which checks untapped lands, not mana_pool
+        // The mana pool is empty at the start of main phase
         let mut castable: Vec<(usize, &Card)> = hand
             .iter()
             .enumerate()
@@ -52,7 +54,7 @@ impl DecisionEngine {
                 if matches!(card, Card::Land(_)) {
                     return false;
                 }
-                if !Self::can_cast(card, &state.mana_pool) {
+                if !crate::game::mana::can_cast_spell(card, state) {
                     return false;
                 }
 
