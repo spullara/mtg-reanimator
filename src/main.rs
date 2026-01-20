@@ -344,59 +344,106 @@ fn compare_decks(db: &CardDatabase, deck1_file: &str, deck2_file: &str, num_game
 }
 
 fn optimize_lands(db: &CardDatabase, num_configs: usize, games_per_config: usize) {
+    use simulation::optimize::{generate_random_land_config_weighted, build_deck_from_config, config_to_string};
+    use crate::rng::GameRng;
+
     println!("\n=== MTG Land Optimization ===\n");
+    println!("Strategy: weighted");
+    println!("  - weighted: Random counts for each land type, respecting max limits\n");
     println!("Testing {} random land configurations", num_configs);
-    println!("Running {} games per configuration", games_per_config);
-    println!();
-    println!("Note: Full optimization requires implementing deck mutation.");
-    println!("This is a placeholder for the optimization framework.");
-    println!();
+    println!("Running {} games per configuration...\n", games_per_config);
+    println!("Fixed non-land cards: 36 cards");
+    println!("Land slots to fill: 24 cards\n");
 
-    // For now, just test the existing deck files
-    let deck_files = ["deck.txt", "deck2.txt", "deck3.txt", "deck4.txt", "deck5.txt"];
-    let mut results: Vec<(&str, f64, f64)> = Vec::new();
+    let mut best_config = None;
+    let mut best_avg_turn = f64::INFINITY;
+    let mut best_win_rate = 0.0;
+    let mut all_results: Vec<(simulation::optimize::LandConfig, f64, f64)> = Vec::new();
 
-    let progress = AtomicUsize::new(0);
-    let total = deck_files.len();
+    let start = std::time::Instant::now();
 
-    for deck_file in &deck_files {
-        if let Ok(deck) = parse_deck_file(deck_file, db) {
-            let deck_results: Vec<_> = (0..games_per_config)
-                .into_par_iter()
-                .map(|i| {
-                    let seed = (std::time::SystemTime::now()
-                        .duration_since(std::time::UNIX_EPOCH)
-                        .unwrap()
-                        .as_nanos() as u64)
-                        .wrapping_add(i as u64);
-                    run_game(&deck, seed, db, false)
-                })
-                .collect();
+    for i in 0..num_configs {
+        // Generate random land configuration
+        let mut rng = GameRng::new(None);
+        let config = generate_random_land_config_weighted(&mut rng);
 
-            let wins: Vec<_> = deck_results.iter().filter(|r| r.win_turn.is_some()).collect();
-            let win_rate = wins.len() as f64 / games_per_config as f64;
-            let avg_win = if !wins.is_empty() {
-                wins.iter().map(|r| r.win_turn.unwrap() as f64).sum::<f64>() / wins.len() as f64
-            } else {
-                0.0
-            };
+        // Build deck from config
+        let deck = match build_deck_from_config(&config, db) {
+            Ok(d) => d,
+            Err(e) => {
+                eprintln!("Error building deck: {}", e);
+                continue;
+            }
+        };
 
-            results.push((deck_file, win_rate, avg_win));
-            let done = progress.fetch_add(1, Ordering::Relaxed) + 1;
-            println!("  [{}/{}] {} - {:.1}% win rate, avg turn {:.2}", done, total, deck_file, win_rate * 100.0, avg_win);
+        // Run games with this configuration
+        let deck_results: Vec<_> = (0..games_per_config)
+            .into_par_iter()
+            .map(|j| {
+                let seed = (std::time::SystemTime::now()
+                    .duration_since(std::time::UNIX_EPOCH)
+                    .unwrap()
+                    .as_nanos() as u64)
+                    .wrapping_add(j as u64);
+                run_game(&deck, seed, db, false)
+            })
+            .collect();
+
+        let wins: Vec<_> = deck_results.iter().filter(|r| r.win_turn.is_some()).collect();
+        let win_rate = wins.len() as f64 / games_per_config as f64;
+        let avg_win_turn = if !wins.is_empty() {
+            wins.iter().map(|r| r.win_turn.unwrap() as f64).sum::<f64>() / wins.len() as f64
+        } else {
+            f64::INFINITY
+        };
+
+        all_results.push((config.clone(), win_rate, avg_win_turn));
+
+        // Track best configuration
+        if avg_win_turn > 0.0 && avg_win_turn < best_avg_turn {
+            best_config = Some(config.clone());
+            best_avg_turn = avg_win_turn;
+            best_win_rate = win_rate;
+
+            println!("[{}/{}] New best! Avg turn: {:.3}, Win rate: {:.1}%",
+                i + 1, num_configs, best_avg_turn, best_win_rate * 100.0);
+            println!("  Lands: {}\n", config_to_string(&config));
+        }
+
+        // Progress update every 100 configs
+        if (i + 1) % 100 == 0 {
+            let elapsed = start.elapsed().as_secs_f64();
+            let eta = (elapsed / (i + 1) as f64) * (num_configs - i - 1) as f64;
+            println!("Progress: {}/{} ({:.1}%) - ETA: {:.0}s",
+                i + 1, num_configs, (i + 1) as f64 / num_configs as f64 * 100.0, eta);
         }
     }
 
-    println!("\n=== Best Deck Configurations ===\n");
-    results.sort_by(|a, b| b.1.partial_cmp(&a.1).unwrap());
-    for (i, (deck, win_rate, avg_turn)) in results.iter().enumerate() {
-        let marker = if i == 0 { "★" } else { " " };
-        println!(
-            "{} {:15} - Win rate: {:5.1}%, Avg turn: {:.2}",
-            marker,
-            deck,
-            win_rate * 100.0,
-            avg_turn
-        );
+    let total_time = start.elapsed().as_secs_f64();
+
+    println!("\n=== Optimization Complete ===");
+    println!("Total time: {:.1}s", total_time);
+    println!("Configurations tested: {}", num_configs);
+    println!("Games per config: {}", games_per_config);
+    println!("Total games: {}\n", num_configs * games_per_config);
+
+    println!("=== BEST LAND CONFIGURATION ===");
+    println!("Average win turn: {:.3}", best_avg_turn);
+    println!("Win rate: {:.1}%", best_win_rate * 100.0);
+    println!("\nLand breakdown:");
+    if let Some(config) = &best_config {
+        let mut lands: Vec<_> = config.iter().filter(|(_, count)| **count > 0).collect();
+        lands.sort_by(|a, b| b.1.cmp(a.1).then_with(|| a.0.cmp(b.0)));
+        for (name, count) in lands {
+            println!("  {} {}", count, name);
+        }
+    }
+
+    // Show top 10 configurations
+    println!("\n=== Top 10 Configurations ===");
+    all_results.sort_by(|a, b| a.2.partial_cmp(&b.2).unwrap_or(std::cmp::Ordering::Equal));
+    for (i, (config, win_rate, avg_turn)) in all_results.iter().take(10).enumerate() {
+        println!("[{}] Avg turn: {:.3}, Win rate: {:.1}%", i + 1, avg_turn, win_rate * 100.0);
+        println!("    {}", config_to_string(config));
     }
 }
