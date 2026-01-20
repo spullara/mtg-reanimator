@@ -158,15 +158,110 @@ pub fn config_to_string(config: &LandConfig) -> String {
         .iter()
         .filter(|(_, count)| **count > 0)
         .collect();
-    
+
     items.sort_by(|a, b| {
         b.1.cmp(a.1).then_with(|| a.0.cmp(b.0))
     });
-    
+
     items
         .iter()
         .map(|(name, count)| format!("{} {}", count, name))
         .collect::<Vec<_>>()
         .join(", ")
+}
+
+/// Calculate a short hash for a deck configuration
+pub fn calculate_deck_hash(config: &LandConfig) -> String {
+    use std::collections::hash_map::DefaultHasher;
+    use std::hash::{Hash, Hasher};
+
+    // Create a sorted list of all cards (fixed + lands)
+    let mut all_cards: Vec<(String, usize)> = FIXED_CARDS
+        .iter()
+        .map(|(name, count)| (name.to_string(), *count))
+        .collect();
+
+    for (name, count) in config {
+        if *count > 0 {
+            all_cards.push((name.clone(), *count));
+        }
+    }
+
+    // Sort alphabetically for consistent hashing
+    all_cards.sort_by(|a, b| a.0.cmp(&b.0));
+
+    // Hash the sorted card list
+    let mut hasher = DefaultHasher::new();
+    for (name, count) in &all_cards {
+        name.hash(&mut hasher);
+        count.hash(&mut hasher);
+    }
+
+    // Return first 8 hex chars of hash
+    format!("{:016x}", hasher.finish())[..8].to_string()
+}
+
+/// Parameters for saving a deck configuration
+pub struct DeckSaveParams {
+    pub win_rate: f64,
+    pub avg_win_turn: f64,
+    pub num_simulations: usize,
+    pub strategy: String,
+    pub turn_distribution: std::collections::HashMap<u32, usize>,
+}
+
+/// Save a deck configuration to a file with optimization results
+pub fn save_deck_to_file(config: &LandConfig, params: &DeckSaveParams) -> std::io::Result<String> {
+    use std::fs::File;
+    use std::io::Write;
+    use chrono::Local;
+
+    let hash = calculate_deck_hash(config);
+    let filename = format!("deck_{}.txt", hash);
+
+    let mut file = File::create(&filename)?;
+
+    // Write header with metadata
+    writeln!(file, "# MTG Reanimator Deck")?;
+    writeln!(file, "# Generated: {}", Local::now().format("%Y-%m-%d %H:%M:%S"))?;
+    writeln!(file, "# Hash: {}", hash)?;
+    writeln!(file, "#")?;
+
+    // Optimization parameters
+    writeln!(file, "# Optimization Results")?;
+    writeln!(file, "# Strategy: {}", params.strategy)?;
+    writeln!(file, "# Simulations: {}", params.num_simulations)?;
+    writeln!(file, "# Win rate: {:.1}%", params.win_rate * 100.0)?;
+    writeln!(file, "# Average win turn: {:.3}", params.avg_win_turn)?;
+    writeln!(file, "#")?;
+
+    // Turn distribution
+    writeln!(file, "# Turn Distribution")?;
+    let mut turns: Vec<_> = params.turn_distribution.iter().collect();
+    turns.sort_by_key(|(turn, _)| *turn);
+    let total_wins: usize = params.turn_distribution.values().sum();
+    for (turn, count) in turns {
+        let pct = if total_wins > 0 { *count as f64 / total_wins as f64 * 100.0 } else { 0.0 };
+        writeln!(file, "# Turn {}: {} ({:.1}%)", turn, count, pct)?;
+    }
+    writeln!(file)?;
+
+    // Write fixed cards first
+    writeln!(file, "# Fixed cards (36)")?;
+    for (name, count) in FIXED_CARDS {
+        writeln!(file, "{} {}", count, name)?;
+    }
+
+    writeln!(file)?;
+
+    // Write lands sorted by count then name
+    writeln!(file, "# Lands (24)")?;
+    let mut lands: Vec<_> = config.iter().filter(|(_, count)| **count > 0).collect();
+    lands.sort_by(|a, b| b.1.cmp(a.1).then_with(|| a.0.cmp(b.0)));
+    for (name, count) in lands {
+        writeln!(file, "{} {}", count, name)?;
+    }
+
+    Ok(filename)
 }
 

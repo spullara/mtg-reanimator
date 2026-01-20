@@ -357,7 +357,7 @@ fn compare_decks(db: &CardDatabase, deck1_file: &str, deck2_file: &str, num_game
 }
 
 fn optimize_lands(db: &CardDatabase, num_configs: usize, games_per_config: usize, strategy: &str) {
-    use simulation::optimize::{generate_random_land_config_weighted, generate_random_land_config_shuffle, build_deck_from_config, config_to_string};
+    use simulation::optimize::{generate_random_land_config_weighted, generate_random_land_config_shuffle, build_deck_from_config, config_to_string, save_deck_to_file, DeckSaveParams};
     use crate::rng::GameRng;
 
     let strategy_desc = match strategy {
@@ -380,6 +380,7 @@ fn optimize_lands(db: &CardDatabase, num_configs: usize, games_per_config: usize
     let mut best_config = None;
     let mut best_avg_turn = f64::INFINITY;
     let mut best_win_rate = 0.0;
+    let mut best_turn_distribution: HashMap<u32, usize> = HashMap::new();
     let mut all_results: Vec<(simulation::optimize::LandConfig, f64, f64)> = Vec::new();
 
     let start = std::time::Instant::now();
@@ -430,6 +431,14 @@ fn optimize_lands(db: &CardDatabase, num_configs: usize, games_per_config: usize
             best_avg_turn = avg_win_turn;
             best_win_rate = win_rate;
 
+            // Build turn distribution for the new best config
+            best_turn_distribution.clear();
+            for result in &wins {
+                if let Some(turn) = result.win_turn {
+                    *best_turn_distribution.entry(turn).or_insert(0) += 1;
+                }
+            }
+
             println!("[{}/{}] New best! Avg turn: {:.3}, Win rate: {:.1}%",
                 i + 1, num_configs, best_avg_turn, best_win_rate * 100.0);
             println!("  Lands: {}\n", config_to_string(&config));
@@ -470,5 +479,20 @@ fn optimize_lands(db: &CardDatabase, num_configs: usize, games_per_config: usize
     for (i, (config, win_rate, avg_turn)) in all_results.iter().take(10).enumerate() {
         println!("[{}] Avg turn: {:.3}, Win rate: {:.1}%", i + 1, avg_turn, win_rate * 100.0);
         println!("    {}", config_to_string(config));
+    }
+
+    // Save best deck to file with all optimization metadata
+    if let Some(config) = &best_config {
+        let params = DeckSaveParams {
+            win_rate: best_win_rate,
+            avg_win_turn: best_avg_turn,
+            num_simulations: games_per_config,
+            strategy: strategy.to_string(),
+            turn_distribution: best_turn_distribution,
+        };
+        match save_deck_to_file(config, &params) {
+            Ok(filename) => println!("\nBest deck saved to: {}", filename),
+            Err(e) => eprintln!("\nFailed to save deck: {}", e),
+        }
     }
 }
