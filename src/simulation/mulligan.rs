@@ -139,12 +139,8 @@ pub fn resolve_mulligans(library: &mut Vec<Card>, rng: &mut GameRng) -> Vec<Card
         } else if lands2 < lands1 {
             (hand2, hand1)
         } else {
-            // Same land count, random pick
-            if rng.random() < 0.5 {
-                (hand1, hand2)
-            } else {
-                (hand2, hand1)
-            }
+            // Same land count, pick hand1 (matches TypeScript behavior)
+            (hand1, hand2)
         }
     } else if lands1 >= 2 {
         (hand1, hand2)

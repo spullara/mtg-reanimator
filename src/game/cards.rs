@@ -77,9 +77,44 @@ pub fn play_land(state: &mut GameState, card: &Card) -> Result<(), String> {
 
     // Handle surveil lands
     if land.has_surveil && land.surveil_amount > 0 {
-        // Surveil logic: mill and choose what to put back
-        let milled = state.library.mill(land.surveil_amount as usize);
-        for card in milled {
+        // Surveil logic: look at top N cards, decide which go to graveyard
+        let surveil_count = land.surveil_amount as usize;
+        let mut to_graveyard = Vec::new();
+        let mut to_keep_on_top = Vec::new();
+
+        // Look at top surveil_count cards
+        for _ in 0..surveil_count {
+            if let Some(card) = state.library.draw() {
+                let name = card.name();
+                let has_kiora_in_hand = state.hand.cards().iter().any(|c| c.name() == "Kiora, the Rising Tide");
+
+                // Decision: put in graveyard if it's a reanimation target or duplicate
+                let put_in_graveyard = matches!(name,
+                    "Bringer of the Last Gift" | "Terror of the Peaks" | "Overlord of the Balemurk" | "Town Greeter"
+                ) || (name == "Kiora, the Rising Tide" && has_kiora_in_hand);
+
+                if put_in_graveyard {
+                    to_graveyard.push(card);
+                } else {
+                    to_keep_on_top.push(card);
+                }
+            }
+        }
+
+        // Put cards back: keep-on-top first, then rest of library, then graveyard cards
+        let mut new_library = to_keep_on_top;
+        while let Some(card) = state.library.draw() {
+            new_library.push(card);
+        }
+        new_library.extend(to_graveyard.clone());
+
+        // Rebuild library
+        for card in new_library {
+            state.library.add_card(card);
+        }
+
+        // Add graveyard cards
+        for card in to_graveyard {
             state.graveyard.add_card(card);
         }
     }

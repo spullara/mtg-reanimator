@@ -335,15 +335,15 @@ pub fn run_game(
     // Initialize game state
     let mut state = GameState::new();
 
+    // Determine if on play or draw (50/50) - BEFORE shuffling to match TypeScript RNG sequence
+    state.on_the_play = rng.random() < 0.5;
+
     // Shuffle deck into library
     let mut shuffled_deck = deck.to_vec();
     rng.shuffle(&mut shuffled_deck);
     for card in shuffled_deck {
         state.library.add_card(card);
     }
-
-    // Determine if on play or draw (50/50)
-    state.on_the_play = rng.random() < 0.5;
 
     // Mulligan phase: resolve mulligans to get opening hand
     let mut library_cards = Vec::new();
@@ -487,7 +487,7 @@ mod tests {
     #[test]
     fn test_simulate_combat_no_creatures() {
         let mut state = GameState::new();
-        let damage = simulate_combat(&mut state);
+        let damage = simulate_combat(&mut state, false);
         assert_eq!(damage, 0);
         assert_eq!(state.opponent_life, 20);
     }
@@ -515,8 +515,8 @@ mod tests {
         
         let permanent = crate::game::zones::Permanent::new(creature, 1);
         state.battlefield.add_permanent(permanent);
-        
-        let damage = simulate_combat(&mut state);
+
+        let damage = simulate_combat(&mut state, false);
         assert_eq!(damage, 3);
         assert_eq!(state.opponent_life, 17);
     }
@@ -545,7 +545,7 @@ mod tests {
         let permanent = crate::game::zones::Permanent::new(creature, 1);
         state.battlefield.add_permanent(permanent);
         
-        let damage = simulate_combat(&mut state);
+        let damage = simulate_combat(&mut state, false);
         assert_eq!(damage, 0); // Can't attack due to summoning sickness
         assert_eq!(state.opponent_life, 20);
     }

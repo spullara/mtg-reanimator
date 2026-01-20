@@ -25,10 +25,10 @@ fn test_full_game_with_seed_12345() {
 fn test_same_seed_produces_same_result() {
     let db = CardDatabase::from_file("cards.json").expect("Failed to load cards");
     let deck = parse_deck_file("deck.txt", &db).expect("Failed to parse deck");
-    
+
     // Run same game twice with same seed
-    let result1 = run_game(&deck, 54321, &db);
-    let result2 = run_game(&deck, 54321, &db);
+    let result1 = run_game(&deck, 54321, &db, false);
+    let result2 = run_game(&deck, 54321, &db, false);
     
     // Results should be identical
     assert_eq!(result1.win_turn, result2.win_turn, "Same seed should produce same win_turn");
@@ -41,10 +41,10 @@ fn test_same_seed_produces_same_result() {
 fn test_different_seeds_produce_different_results() {
     let db = CardDatabase::from_file("cards.json").expect("Failed to load cards");
     let deck = parse_deck_file("deck.txt", &db).expect("Failed to parse deck");
-    
+
     // Run games with different seeds
-    let result1 = run_game(&deck, 111, &db);
-    let result2 = run_game(&deck, 222, &db);
+    let result1 = run_game(&deck, 111, &db, false);
+    let result2 = run_game(&deck, 222, &db, false);
     
     // At least one property should differ (very unlikely to be identical)
     let results_differ = result1.win_turn != result2.win_turn 
@@ -105,7 +105,7 @@ fn test_multiple_deck_files() {
             assert!(deck.len() >= 60, "Deck {} should have at least 60 cards, got {}", deck_file, deck.len());
 
             // Should be able to run a game
-            let result = run_game(&deck, 42, &db);
+            let result = run_game(&deck, 42, &db, false);
             assert!(result.on_the_play || !result.on_the_play, "Game should complete");
         }
     }
@@ -117,7 +117,7 @@ fn test_game_state_consistency() {
     let deck = parse_deck_file("deck.txt", &db).expect("Failed to parse deck");
 
     // Run a game and verify state consistency
-    let result = run_game(&deck, 777, &db);
+    let result = run_game(&deck, 777, &db, false);
 
     // If we won, verify damage adds up
     if result.win_turn.is_some() {
@@ -135,7 +135,7 @@ fn test_deterministic_rng_sequence() {
     // Run 5 games with same seed and verify all results are identical
     let mut results = Vec::new();
     for _ in 0..5 {
-        results.push(run_game(&deck, 555, &db));
+        results.push(run_game(&deck, 555, &db, false));
     }
 
     // All results should be identical
