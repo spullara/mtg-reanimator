@@ -47,8 +47,8 @@ pub fn play_land(state: &mut GameState, card: &Card, verbose: bool) -> Result<()
             enters_tapped = land_count >= 3;
         }
         LandSubtype::Town => {
-            // Starting Town: enter untapped, tap after turn 3
-            enters_tapped = false;
+            // Starting Town: enters untapped on turns 1-3, tapped on turn 4+
+            enters_tapped = state.turn > 3;
         }
         LandSubtype::Utility => {
             // Verge lands: enter untapped if revealed land type
