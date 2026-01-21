@@ -661,6 +661,12 @@ public final class SimulationEngine {
                         // Handle creatures specially
                         if (card instanceof Card.Creature) {
                             CardResolver.castCreature(state, card, false);
+                            // Process ETB triggers for the creature
+                            List<Permanent> perms = state.getBattlefield().getPermanents();
+                            if (!perms.isEmpty()) {
+                                Permanent lastPerm = perms.get(perms.size() - 1);
+                                CardResolver.processEtbTriggersVerbose(state, lastPerm, db, verbose, rng);
+                            }
                         } else {
                             CardResolver.castSpell(state, card, db, verbose, rng);
                         }
@@ -846,6 +852,14 @@ public final class SimulationEngine {
                                 System.out.println("  [Cast] " + cardName + " (impending)");
                             } else {
                                 System.out.println("  [Cast] " + cardName);
+                            }
+                        }
+                        // Process ETB triggers for the creature (unless using impending - those aren't creatures yet!)
+                        if (!useImpending) {
+                            List<Permanent> perms = state.getBattlefield().getPermanents();
+                            if (!perms.isEmpty()) {
+                                Permanent lastPerm = perms.get(perms.size() - 1);
+                                CardResolver.processEtbTriggersVerbose(state, lastPerm, db, verbose, rng);
                             }
                         }
                     } else {

@@ -393,12 +393,16 @@ public class CardResolver {
 
     /**
      * Select best card from milled cards to return.
-     * Priority: Spider-Man > Kiora > lands
+     * NEVER returns Bringer or Terror - they MUST stay in graveyard for reanimation.
+     * Priority: Spider-Man > Kiora > lands > non-combo creatures
      */
     private static Card selectBestFromMill(List<Card> milled, GameState state) {
+        // COMBO PIECES - NEVER return these, they must stay in graveyard!
+        Set<String> comboPieces = Set.of("Bringer of the Last Gift", "Terror of the Peaks");
+
         // Priority 1: Spider-Man
         for (Card c : milled) {
-            if (c.getName().equals("The Superior Spider-Man")) {
+            if (c.getName().equals("Superior Spider-Man")) {
                 return c;
             }
         }
@@ -417,15 +421,22 @@ public class CardResolver {
             }
         }
 
-        // Priority 4: Any creature
+        // Priority 4: Any NON-COMBO creature
         for (Card c : milled) {
-            if (c instanceof Card.Creature) {
+            if (c instanceof Card.Creature && !comboPieces.contains(c.getName())) {
                 return c;
             }
         }
 
-        // Return first permanent if any
-        return milled.isEmpty() ? null : milled.get(0);
+        // Priority 5: Any permanent except combo pieces
+        for (Card c : milled) {
+            if (!(c instanceof Card.Instant) && !(c instanceof Card.Sorcery)
+                    && !comboPieces.contains(c.getName())) {
+                return c;
+            }
+        }
+
+        return null;
     }
 
     /**
@@ -447,7 +458,7 @@ public class CardResolver {
 
         // Priority: Spider-Man > Kiora > any creature > land
         for (Card c : library) {
-            if (c.getName().equals("The Superior Spider-Man")) {
+            if (c.getName().equals("Superior Spider-Man")) {
                 target = c;
                 break;
             }
@@ -498,12 +509,16 @@ public class CardResolver {
 
     /**
      * Choose which card to return from mill.
+     * NEVER returns Bringer or Terror - they MUST stay in graveyard for reanimation.
      * @return index of card to return, or -1 if none
      */
     private static int chooseMillReturn(List<Card> milled, CardType preferredType) {
+        // COMBO PIECES - NEVER return these, they must stay in graveyard!
+        Set<String> comboPieces = Set.of("Bringer of the Last Gift", "Terror of the Peaks");
+
         // Priority 1: Spider-Man
         for (int i = 0; i < milled.size(); i++) {
-            if (milled.get(i).getName().equals("The Superior Spider-Man")) {
+            if (milled.get(i).getName().equals("Superior Spider-Man")) {
                 return i;
             }
         }
@@ -515,21 +530,26 @@ public class CardResolver {
             }
         }
 
-        // Priority 3: Preferred type (creature or land)
+        // Priority 3: Blue-producing lands (critical for combo mana)
+        Set<String> blueLands = Set.of("Watery Grave", "Undercity Sewers", "Gloomlake Verge", "Island");
         for (int i = 0; i < milled.size(); i++) {
             Card c = milled.get(i);
-            if (preferredType == CardType.CREATURE && c instanceof Card.Creature) {
-                return i;
-            }
-            if (preferredType == CardType.LAND && c instanceof Card.Land) {
+            if (c instanceof Card.Land && blueLands.contains(c.getName())) {
                 return i;
             }
         }
 
-        // Priority 4: Any valid card
+        // Priority 4: Any land
+        for (int i = 0; i < milled.size(); i++) {
+            if (milled.get(i) instanceof Card.Land) {
+                return i;
+            }
+        }
+
+        // Priority 5: Non-combo creatures
         for (int i = 0; i < milled.size(); i++) {
             Card c = milled.get(i);
-            if (c instanceof Card.Creature || c instanceof Card.Land) {
+            if (c instanceof Card.Creature && !comboPieces.contains(c.getName())) {
                 return i;
             }
         }
@@ -571,7 +591,7 @@ public class CardResolver {
 
                 // First check graveyard
                 for (Card c : graveyard) {
-                    if (c.getName().equals("The Superior Spider-Man")) {
+                    if (c.getName().equals("Superior Spider-Man")) {
                         target = c;
                         break;
                     }
