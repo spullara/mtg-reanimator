@@ -730,7 +730,7 @@ pub fn process_etb_triggers_verbose(
                     }
 
                     // Now trigger Bringer's ETB (mass reanimate!)
-                    resolve_bringer_etb(state, verbose);
+                    resolve_bringer_etb(state, rng, verbose);
                     return Ok(());
                 }
 
@@ -828,7 +828,7 @@ pub fn process_etb_triggers_verbose(
 /// 1. Sacrifice all other creatures (except impending ones with time counters)
 /// 2. Return ALL creature cards from graveyard to battlefield
 /// 3. Trigger Terror of the Peaks for each creature entering
-pub fn resolve_bringer_etb(state: &mut GameState, verbose: bool) {
+pub fn resolve_bringer_etb(state: &mut GameState, rng: &mut crate::rng::GameRng, verbose: bool) {
     // Step 1: Sacrifice all other creatures (move to graveyard)
     // NOTE: Impending creatures (with time counters) are NOT creatures yet - they're enchantments!
     // NOTE: We need to find the Spider-Man that just entered (the one copying Bringer)
@@ -938,7 +938,26 @@ pub fn resolve_bringer_etb(state: &mut GameState, verbose: bool) {
         state.battlefield.add_permanent(perm);
     }
 
-    // Step 3: Resolve Terror triggers for each creature that entered
+    // Step 3: Resolve ETBs for reanimated creatures
+    for creature in &creatures_to_reanimate {
+        match creature.name() {
+            "Kiora, the Rising Tide" => {
+                resolve_kiora_etb(state, verbose);
+            }
+            "Town Greeter" => {
+                resolve_town_greeter_etb(state, verbose);
+            }
+            "Overlord of the Balemurk" => {
+                resolve_overlord_etb(state, verbose);
+            }
+            "Formidable Speaker" => {
+                resolve_formidable_speaker_etb(state, rng, verbose);
+            }
+            _ => {}
+        }
+    }
+
+    // Step 4: Resolve Terror triggers for each creature that entered
     // Note: If Spider-Man copied Terror, it now counts as a Terror for triggers!
     resolve_terror_triggers(state, &creatures_to_reanimate, verbose);
 
