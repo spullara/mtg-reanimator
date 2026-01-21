@@ -48,10 +48,23 @@ fn has_ardyn_on_battlefield(state: &GameState) -> bool {
 
 /// Check if a permanent is a Demon (has "Demon" in creature_types or is a copy of a Demon)
 fn is_demon(permanent: &crate::game::zones::Permanent) -> bool {
-    match &permanent.card {
+    // Known Demons in the game (for copy checks)
+    const KNOWN_DEMONS: &[&str] = &["Bringer of the Last Gift"];
+
+    // Check if the card itself is a Demon
+    let card_is_demon = match &permanent.card {
         Card::Creature(c) => c.creature_types.iter().any(|t| t == "Demon"),
         _ => false,
-    }
+    };
+
+    // Check if this is a copy of a known Demon
+    let copy_is_demon = permanent
+        .is_copy_of
+        .as_ref()
+        .map(|name| KNOWN_DEMONS.contains(&name.as_str()))
+        .unwrap_or(false);
+
+    card_is_demon || copy_is_demon
 }
 
 /// Resolve Ardyn's Starscourge trigger: exile a creature from graveyard and create a 5/5 Demon token copy
@@ -191,17 +204,24 @@ pub fn simulate_combat(state: &mut GameState, verbose: bool) -> u32 {
     }
 
     // Tap all attackers and calculate damage
-    for idx in attackers {
-        if let Some(permanent) = state.battlefield.permanents_mut().get_mut(idx) {
+    for idx in &attackers {
+        // Check if demon BEFORE taking mutable reference
+        let is_demon_attacker = if let Some(perm) = state.battlefield.permanents().get(*idx) {
+            ardyn_on_battlefield && is_demon(perm)
+        } else {
+            false
+        };
+
+        if let Some(permanent) = state.battlefield.permanents_mut().get_mut(*idx) {
             permanent.tapped = true;
 
-            // Get creature power
+            // Get creature power (use copied power if this is a copy)
             if let Card::Creature(creature) = &permanent.card {
-                let power = creature.power as u32;
+                let power = permanent.copied_power.unwrap_or(creature.power);
                 total_damage += power;
 
                 // Track lifelink damage for Demons when Ardyn is present
-                if ardyn_on_battlefield && creature.creature_types.iter().any(|t| t == "Demon") {
+                if is_demon_attacker {
                     lifelink_damage += power;
                 }
             }
@@ -584,8 +604,16 @@ pub fn main_phase(state: &mut GameState, db: &CardDatabase, verbose: bool, rng: 
                             let perm_idx = state.battlefield.permanents().len().saturating_sub(1);
                             if perm_idx < state.battlefield.permanents().len() {
                                 let mut perm = state.battlefield.permanents_mut()[perm_idx].clone();
+                                let perm_name = perm.card.name().to_string();
+                                let perm_turn = perm.turn_entered;
                                 let _ = cards::process_etb_triggers_verbose(state, &mut perm, db, verbose, rng);
-                                state.battlefield.permanents_mut()[perm_idx] = perm;
+
+                                // Find the permanent by name+turn after ETB (indices may have changed)
+                                if let Some(idx) = state.battlefield.permanents().iter().position(|p|
+                                    p.card.name() == perm_name && p.turn_entered == perm_turn
+                                ) {
+                                    state.battlefield.permanents_mut()[idx] = perm;
+                                }
                             }
                         } else {
                             let _ = cards::cast_spell(state, &card, db, verbose, rng);
@@ -834,8 +862,16 @@ pub fn main_phase(state: &mut GameState, db: &CardDatabase, verbose: bool, rng: 
                             let perm_idx = state.battlefield.permanents().len().saturating_sub(1);
                             if perm_idx < state.battlefield.permanents().len() {
                                 let mut perm = state.battlefield.permanents_mut()[perm_idx].clone();
+                                let perm_name = perm.card.name().to_string();
+                                let perm_turn = perm.turn_entered;
                                 let _ = cards::process_etb_triggers_verbose(state, &mut perm, db, verbose, rng);
-                                state.battlefield.permanents_mut()[perm_idx] = perm;
+
+                                // Find the permanent by name+turn after ETB (indices may have changed)
+                                if let Some(idx) = state.battlefield.permanents().iter().position(|p|
+                                    p.card.name() == perm_name && p.turn_entered == perm_turn
+                                ) {
+                                    state.battlefield.permanents_mut()[idx] = perm;
+                                }
                             }
 
                             if verbose {

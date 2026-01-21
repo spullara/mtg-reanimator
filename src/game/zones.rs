@@ -17,6 +17,7 @@ pub struct Permanent {
     pub chosen_type: Option<String>,      // For Cavern of Souls
     pub chosen_basic_type: Option<String>, // For Multiversal Passage
     pub is_copy_of: Option<String>,       // For Superior Spider-Man
+    pub copied_power: Option<u32>,        // Power of the copied creature (for combat damage)
 }
 
 impl Permanent {
@@ -29,6 +30,7 @@ impl Permanent {
             chosen_type: None,
             chosen_basic_type: None,
             is_copy_of: None,
+            copied_power: None,
         }
     }
 
