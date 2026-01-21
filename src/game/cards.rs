@@ -1300,6 +1300,50 @@ pub fn resolve_formidable_speaker_etb(state: &mut GameState, rng: &mut crate::rn
         }
     }
 
+    // Priority 4: If we have Spider-Man, and Terror in GY but no Bringer in GY or hand
+    // We need to get Bringer somehow - either tutor it, or tutor a mill creature
+    if tutor_target.is_none() && has_spider_man && has_terror_in_gy && !has_bringer_in_gy && !has_bringer_in_hand {
+        // Find something to discard (prefer excess lands)
+        let lands_in_hand: Vec<usize> = state.hand.cards().iter()
+            .enumerate()
+            .filter(|(_, c)| matches!(c, Card::Land(_)))
+            .map(|(i, _)| i)
+            .collect();
+
+        // Only discard if we have 2+ lands (keep at least 1 for land drop)
+        if lands_in_hand.len() >= 2 {
+            discard_target = Some("land".to_string());
+            // Tutor for Bringer if possible, otherwise Overlord/Kiora for milling
+            tutor_target = Some("Bringer of the Last Gift".to_string());
+        }
+    }
+
+    // Priority 5: If we have Spider-Man and Bringer in GY but need more creatures for damage
+    // Tutor for mill creatures (Overlord/Kiora) to add to graveyard value
+    if tutor_target.is_none() && has_spider_man && has_bringer_in_gy {
+        let has_overlord = state.hand.cards().iter().any(|c| c.name() == "Overlord of the Balemurk")
+            || state.graveyard.cards().iter().any(|c| c.name() == "Overlord of the Balemurk");
+        let has_kiora = state.hand.cards().iter().any(|c| c.name() == "Kiora, the Rising Tide")
+            || state.graveyard.cards().iter().any(|c| c.name() == "Kiora, the Rising Tide");
+
+        // Find something to discard (prefer excess lands)
+        let lands_in_hand: Vec<usize> = state.hand.cards().iter()
+            .enumerate()
+            .filter(|(_, c)| matches!(c, Card::Land(_)))
+            .map(|(i, _)| i)
+            .collect();
+
+        if lands_in_hand.len() >= 2 {
+            if !has_overlord {
+                discard_target = Some("land".to_string());
+                tutor_target = Some("Overlord of the Balemurk".to_string());
+            } else if !has_kiora {
+                discard_target = Some("land".to_string());
+                tutor_target = Some("Kiora, the Rising Tide".to_string());
+            }
+        }
+    }
+
     // Execute the ability if we have targets
     if let (Some(discard), Some(tutor)) = (&discard_target, &tutor_target) {
         // Find and discard the card
