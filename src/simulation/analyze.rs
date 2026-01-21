@@ -304,7 +304,7 @@ pub fn run_game_to_turn4(
     // This gives us the state at the START of turn 4's main phase
     start_turn(&mut state);
     upkeep_phase(&mut state);
-    draw_phase(&mut state);
+    draw_phase(&mut state, false);
 
     // Analyze state at START of turn 4 main phase
     // All lands are untapped (from start_turn), we've drawn for the turn

@@ -100,7 +100,7 @@ pub fn execute_turn(state: &mut GameState, db: &CardDatabase, verbose: bool, rng
     // Draw phase
     state.phase = crate::game::state::Phase::Draw;
     let hand_before = state.hand.size();
-    draw_phase(state);
+    draw_phase(state, verbose);
 
     if verbose {
         if state.hand.size() > hand_before {
@@ -558,15 +558,6 @@ pub fn main_phase(state: &mut GameState, db: &CardDatabase, verbose: bool, rng: 
                 true
             })
             .collect();
-
-
-        // DEBUG: Print what spells are castable
-        if verbose {
-            println!("    DEBUG: Turn {}, {} castable spells", state.turn, castable_spells.len());
-            for (idx, card) in &castable_spells {
-                println!("      - {} (idx {})", card.name(), idx);
-            }
-        }
 
         if castable_spells.is_empty() {
             break;

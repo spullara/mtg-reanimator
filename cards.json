@@ -5,7 +5,9 @@
     "mana_value": 0,
     "subtype": "basic",
     "enters_tapped": false,
-    "colors": ["G"]
+    "colors": [
+      "G"
+    ]
   },
   {
     "name": "Island",
@@ -13,7 +15,9 @@
     "mana_value": 0,
     "subtype": "basic",
     "enters_tapped": false,
-    "colors": ["U"]
+    "colors": [
+      "U"
+    ]
   },
   {
     "name": "Swamp",
@@ -21,7 +25,9 @@
     "mana_value": 0,
     "subtype": "basic",
     "enters_tapped": false,
-    "colors": ["B"]
+    "colors": [
+      "B"
+    ]
   },
   {
     "name": "Watery Grave",
@@ -29,7 +35,10 @@
     "mana_value": 0,
     "subtype": "shock",
     "enters_tapped": false,
-    "colors": ["U", "B"]
+    "colors": [
+      "U",
+      "B"
+    ]
   },
   {
     "name": "Undercity Sewers",
@@ -37,7 +46,10 @@
     "mana_value": 0,
     "subtype": "surveil",
     "enters_tapped": true,
-    "colors": ["U", "B"],
+    "colors": [
+      "U",
+      "B"
+    ],
     "has_surveil": true,
     "surveil_amount": 1
   },
@@ -47,7 +59,10 @@
     "mana_value": 0,
     "subtype": "surveil",
     "enters_tapped": true,
-    "colors": ["B", "G"],
+    "colors": [
+      "B",
+      "G"
+    ],
     "has_surveil": true,
     "surveil_amount": 1
   },
@@ -57,7 +72,9 @@
     "mana_value": 0,
     "subtype": "utility",
     "enters_tapped": false,
-    "colors": ["C"]
+    "colors": [
+      "C"
+    ]
   },
   {
     "name": "Restless Cottage",
@@ -65,7 +82,10 @@
     "mana_value": 0,
     "subtype": "utility",
     "enters_tapped": true,
-    "colors": ["B", "G"]
+    "colors": [
+      "B",
+      "G"
+    ]
   },
   {
     "name": "Wastewood Verge",
@@ -73,7 +93,10 @@
     "mana_value": 0,
     "subtype": "utility",
     "enters_tapped": false,
-    "colors": ["G", "B"]
+    "colors": [
+      "G",
+      "B"
+    ]
   },
   {
     "name": "Gloomlake Verge",
@@ -81,7 +104,10 @@
     "mana_value": 0,
     "subtype": "utility",
     "enters_tapped": false,
-    "colors": ["U", "B"]
+    "colors": [
+      "U",
+      "B"
+    ]
   },
   {
     "name": "Multiversal Passage",
@@ -89,7 +115,13 @@
     "mana_value": 0,
     "subtype": "utility",
     "enters_tapped": false,
-    "colors": ["W", "U", "B", "R", "G"]
+    "colors": [
+      "W",
+      "U",
+      "B",
+      "R",
+      "G"
+    ]
   },
   {
     "name": "Blooming Marsh",
@@ -97,7 +129,10 @@
     "mana_value": 0,
     "subtype": "fastland",
     "enters_tapped": false,
-    "colors": ["B", "G"]
+    "colors": [
+      "B",
+      "G"
+    ]
   },
   {
     "name": "Starting Town",
@@ -105,120 +140,223 @@
     "mana_value": 0,
     "subtype": "town",
     "enters_tapped": false,
-    "colors": ["C", "W", "U", "B", "R", "G"]
+    "colors": [
+      "C",
+      "W",
+      "U",
+      "B",
+      "R",
+      "G"
+    ]
   },
   {
     "name": "Terror of the Peaks",
     "card_type": "creature",
-    "mana_cost": {"red": 2, "generic": 3},
+    "mana_cost": {
+      "red": 2,
+      "generic": 3
+    },
     "mana_value": 5,
     "power": 5,
     "toughness": 4,
-    "creature_types": ["Dragon"],
-    "abilities": ["flying", "etb_damage_trigger"]
+    "creature_types": [
+      "Dragon"
+    ],
+    "abilities": [
+      "flying",
+      "etb_damage_trigger"
+    ]
   },
   {
     "name": "Bringer of the Last Gift",
     "card_type": "creature",
-    "mana_cost": {"black": 2, "generic": 6},
+    "mana_cost": {
+      "black": 2,
+      "generic": 6
+    },
     "mana_value": 8,
     "power": 6,
     "toughness": 6,
-    "creature_types": ["Vampire", "Demon"],
-    "abilities": ["flying", "etb_mass_reanimate"]
+    "creature_types": [
+      "Vampire",
+      "Demon"
+    ],
+    "abilities": [
+      "flying",
+      "etb_mass_reanimate"
+    ]
   },
   {
     "name": "Overlord of the Balemurk",
     "card_type": "creature",
-    "mana_cost": {"black": 2, "generic": 3},
+    "mana_cost": {
+      "black": 2,
+      "generic": 3
+    },
     "mana_value": 5,
     "power": 5,
     "toughness": 5,
-    "creature_types": ["Avatar", "Horror"],
-    "abilities": ["impending_5", "etb_or_attack_mill_4_return"],
-    "impending_cost": {"black": 1, "generic": 1},
+    "creature_types": [
+      "Avatar",
+      "Horror"
+    ],
+    "abilities": [
+      "impending_5",
+      "etb_or_attack_mill_4_return"
+    ],
+    "impending_cost": {
+      "black": 1,
+      "generic": 1
+    },
     "impending_counters": 5
   },
   {
     "name": "Kiora, the Rising Tide",
     "card_type": "creature",
-    "mana_cost": {"blue": 1, "generic": 2},
+    "mana_cost": {
+      "blue": 1,
+      "generic": 2
+    },
     "mana_value": 3,
     "power": 3,
     "toughness": 2,
     "is_legendary": true,
-    "creature_types": ["Merfolk", "Noble"],
-    "abilities": ["etb_draw_2_discard_2", "threshold_create_octopus"]
+    "creature_types": [
+      "Merfolk",
+      "Noble"
+    ],
+    "abilities": [
+      "etb_draw_2_discard_2",
+      "threshold_create_octopus"
+    ]
   },
   {
     "name": "Town Greeter",
     "card_type": "creature",
-    "mana_cost": {"green": 1, "generic": 1},
+    "mana_cost": {
+      "green": 1,
+      "generic": 1
+    },
     "mana_value": 2,
     "power": 1,
     "toughness": 1,
-    "creature_types": ["Human", "Citizen"],
-    "abilities": ["etb_mill_4_return_land"]
+    "creature_types": [
+      "Human",
+      "Citizen"
+    ],
+    "abilities": [
+      "etb_mill_4_return_land"
+    ]
   },
   {
     "name": "Formidable Speaker",
     "card_type": "creature",
-    "mana_cost": {"green": 1, "generic": 2},
+    "mana_cost": {
+      "green": 1,
+      "generic": 2
+    },
     "mana_value": 3,
     "power": 2,
     "toughness": 4,
-    "creature_types": ["Elf", "Druid"],
-    "abilities": ["etb_discard_tutor_creature"]
+    "creature_types": [
+      "Elf",
+      "Druid"
+    ],
+    "abilities": [
+      "etb_discard_tutor_creature"
+    ]
   },
   {
     "name": "Superior Spider-Man",
     "card_type": "creature",
-    "mana_cost": {"blue": 1, "black": 1, "generic": 2},
+    "mana_cost": {
+      "blue": 1,
+      "black": 1,
+      "generic": 2
+    },
     "mana_value": 4,
     "power": 4,
     "toughness": 4,
     "is_legendary": true,
-    "creature_types": ["Spider", "Human", "Hero"],
-    "abilities": ["mind_swap_copy"]
+    "creature_types": [
+      "Spider",
+      "Human",
+      "Hero"
+    ],
+    "abilities": [
+      "mind_swap_copy"
+    ]
   },
   {
     "name": "Kavaero, Mind-Bitten",
     "card_type": "creature",
-    "mana_cost": {"blue": 1, "black": 1, "generic": 2},
+    "mana_cost": {
+      "blue": 1,
+      "black": 1,
+      "generic": 2
+    },
     "mana_value": 4,
     "power": 4,
     "toughness": 4,
     "is_legendary": true,
-    "creature_types": ["Spider", "Human", "Hero"],
-    "abilities": ["mind_swap_copy"]
+    "creature_types": [
+      "Spider",
+      "Human",
+      "Hero"
+    ],
+    "abilities": [
+      "mind_swap_copy"
+    ]
   },
   {
     "name": "Analyze the Pollen",
     "card_type": "sorcery",
-    "mana_cost": {"green": 1},
+    "mana_cost": {
+      "green": 1
+    },
     "mana_value": 1,
-    "abilities": ["search_land_or_creature_with_evidence"]
+    "abilities": [
+      "search_land_or_creature_with_evidence"
+    ]
   },
   {
     "name": "Cache Grab",
     "card_type": "instant",
-    "mana_cost": {"green": 1, "generic": 1},
+    "mana_cost": {
+      "green": 1,
+      "generic": 1
+    },
     "mana_value": 2,
-    "abilities": ["mill_4_return_permanent"]
+    "abilities": [
+      "mill_4_return_permanent"
+    ]
   },
   {
     "name": "Dredger's Insight",
     "card_type": "enchantment",
-    "mana_cost": {"green": 1, "generic": 1},
+    "mana_cost": {
+      "green": 1,
+      "generic": 1
+    },
     "mana_value": 2,
-    "abilities": ["etb_mill_4_return_artifact_creature_land", "graveyard_leave_lifegain"]
+    "abilities": [
+      "etb_mill_4_return_artifact_creature_land",
+      "graveyard_leave_lifegain"
+    ]
   },
   {
     "name": "Awaken the Honored Dead",
     "card_type": "saga",
-    "mana_cost": {"black": 1, "green": 1, "blue": 1},
+    "mana_cost": {
+      "black": 1,
+      "green": 1,
+      "blue": 1
+    },
     "mana_value": 3,
-    "chapters": ["destroy_nonland_permanent", "mill_3", "discard_return_creature_or_land"]
+    "chapters": [
+      "mill_3",
+      "mill_3",
+      "return_or_search"
+    ]
   }
 ]
-
