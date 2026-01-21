@@ -38,21 +38,146 @@ fn get_available_colors(state: &GameState) -> ColorFlags {
     colors
 }
 
+/// Check if Ardyn, the Usurper is on the battlefield
+fn has_ardyn_on_battlefield(state: &GameState) -> bool {
+    state.battlefield.permanents().iter().any(|p| {
+        p.card.name() == "Ardyn, the Usurper"
+            || p.is_copy_of.as_deref() == Some("Ardyn, the Usurper")
+    })
+}
+
+/// Check if a permanent is a Demon (has "Demon" in creature_types or is a copy of a Demon)
+fn is_demon(permanent: &crate::game::zones::Permanent) -> bool {
+    match &permanent.card {
+        Card::Creature(c) => c.creature_types.iter().any(|t| t == "Demon"),
+        _ => false,
+    }
+}
+
+/// Resolve Ardyn's Starscourge trigger: exile a creature from graveyard and create a 5/5 Demon token copy
+fn resolve_starscourge(state: &mut GameState, verbose: bool) {
+    // Find the best creature in graveyard to exile
+    // Priority: high power creatures, especially reanimation targets like Bringer
+    let mut best_idx: Option<usize> = None;
+    let mut best_power: u32 = 0;
+
+    for (idx, card) in state.graveyard.cards().iter().enumerate() {
+        if let Card::Creature(c) = card {
+            // Prioritize Bringer of the Last Gift and Terror of the Peaks
+            let priority_boost = if c.base.name == "Bringer of the Last Gift" {
+                100
+            } else if c.base.name == "Terror of the Peaks" {
+                50
+            } else {
+                0
+            };
+            let effective_power = c.power + priority_boost;
+
+            if effective_power > best_power {
+                best_power = effective_power;
+                best_idx = Some(idx);
+            }
+        }
+    }
+
+    if let Some(idx) = best_idx {
+        // Get the creature name before removing
+        let creature_name = state.graveyard.cards()[idx].name().to_string();
+        // Note: creature_power is not used since token is always 5/5, but keeping for reference
+        let _creature_power = if let Card::Creature(c) = &state.graveyard.cards()[idx] {
+            c.power
+        } else {
+            5
+        };
+
+        // Remove from graveyard and add to exile
+        if let Some(card) = state.graveyard.remove_card(idx) {
+            if verbose {
+                println!("[Starscourge] Ardyn exiles {} from graveyard", card.name());
+            }
+            state.add_to_exile(card);
+        }
+
+        // Create a 5/5 Demon token copy of the exiled creature
+        // The token has Demon creature type added so it benefits from Ardyn's abilities
+        let token = Card::Creature(crate::card::CreatureCard {
+            base: crate::card::types::BaseCard {
+                name: format!("{} (Starscourge Token)", creature_name),
+                mana_cost: Default::default(),
+                mana_value: 0,
+            },
+            power: 5,
+            toughness: 5,
+            is_legendary: false,
+            creature_types: vec!["Demon".to_string()],
+            abilities: vec![],
+            impending_cost: None,
+            impending_counters: None,
+        });
+
+        let mut perm = crate::game::zones::Permanent::new(token, state.turn);
+        perm.is_copy_of = Some(creature_name.clone());
+
+        state.battlefield.add_permanent(perm);
+
+        if verbose {
+            println!("[Starscourge] Created a 5/5 Demon token copy of {} (has haste from Ardyn)", creature_name);
+        }
+
+        // Trigger Terror of the Peaks if on battlefield (for the 5/5 token entering)
+        let terror_count = state.battlefield.permanents().iter()
+            .filter(|p| {
+                p.card.name() == "Terror of the Peaks"
+                    || p.is_copy_of.as_deref() == Some("Terror of the Peaks")
+            })
+            .count() as i32;
+
+        if terror_count > 0 {
+            let terror_damage = 5 * terror_count; // Token is 5/5
+            state.opponent_life -= terror_damage;
+            if verbose {
+                println!("[Terror] {} damage from Starscourge token entering (5 power x {} Terror(s))",
+                    terror_damage, terror_count);
+            }
+        }
+    }
+}
+
 /// Simulate combat phase: declare attackers and deal damage
 pub fn simulate_combat(state: &mut GameState, verbose: bool) -> u32 {
     let mut total_damage = 0;
 
+    // Check if Ardyn is on the battlefield (for haste and Starscourge)
+    let ardyn_on_battlefield = has_ardyn_on_battlefield(state);
+
+    // Resolve Starscourge trigger at beginning of combat (if Ardyn is on battlefield)
+    if ardyn_on_battlefield {
+        resolve_starscourge(state, verbose);
+    }
+
     // Find eligible attackers (creatures without summoning sickness, not tapped)
     let mut attackers = Vec::new();
+    let mut lifelink_damage = 0u32;
+
     for (idx, permanent) in state.battlefield.permanents().iter().enumerate() {
         // Must be a creature
         if !matches!(permanent.card, Card::Creature(_)) {
             continue;
         }
 
-        // Check summoning sickness (entered before this turn)
-        if permanent.turn_entered >= state.turn {
+        // Check for impending counters (creature is still an enchantment)
+        if permanent.get_counter(crate::game::zones::CounterType::Time) > 0 {
             continue;
+        }
+
+        // Check summoning sickness (entered before this turn)
+        // Exception: Demons have haste if Ardyn is on battlefield
+        let has_summoning_sickness = permanent.turn_entered >= state.turn;
+        if has_summoning_sickness {
+            let demon_with_haste = ardyn_on_battlefield && is_demon(permanent);
+            if !demon_with_haste {
+                continue;
+            }
         }
 
         // Check if tapped
@@ -70,13 +195,27 @@ pub fn simulate_combat(state: &mut GameState, verbose: bool) -> u32 {
 
             // Get creature power
             if let Card::Creature(creature) = &permanent.card {
-                total_damage += creature.power as u32;
+                let power = creature.power as u32;
+                total_damage += power;
+
+                // Track lifelink damage for Demons when Ardyn is present
+                if ardyn_on_battlefield && creature.creature_types.iter().any(|t| t == "Demon") {
+                    lifelink_damage += power;
+                }
             }
         }
     }
 
     // Deal damage to opponent
     state.opponent_life -= total_damage as i32;
+
+    // Gain life from lifelink
+    if lifelink_damage > 0 {
+        state.life += lifelink_damage as i32;
+        if verbose {
+            println!("[Combat] Gained {} life from Demon lifelink", lifelink_damage);
+        }
+    }
 
     if verbose && total_damage > 0 {
         println!("[Combat] {} damage dealt", total_damage);
@@ -885,7 +1024,7 @@ mod tests {
     fn test_simulate_combat_summoning_sickness() {
         let mut state = GameState::new();
         state.turn = 1;
-        
+
         // Add a creature that entered this turn (has summoning sickness)
         let creature = Card::Creature(CreatureCard {
             base: BaseCard {
@@ -901,13 +1040,203 @@ mod tests {
             impending_cost: None,
             impending_counters: None,
         });
-        
+
         let permanent = crate::game::zones::Permanent::new(creature, 1);
         state.battlefield.add_permanent(permanent);
-        
+
         let damage = simulate_combat(&mut state, false);
         assert_eq!(damage, 0); // Can't attack due to summoning sickness
         assert_eq!(state.opponent_life, 20);
+    }
+
+    #[test]
+    fn test_demon_haste_with_ardyn() {
+        let mut state = GameState::new();
+        state.turn = 1;
+
+        // Add Ardyn to battlefield (entered on a previous turn)
+        let ardyn = Card::Creature(CreatureCard {
+            base: BaseCard {
+                name: "Ardyn, the Usurper".to_string(),
+                mana_cost: Default::default(),
+                mana_value: 8,
+            },
+            power: 4,
+            toughness: 4,
+            is_legendary: true,
+            creature_types: vec!["Elder".to_string(), "Human".to_string(), "Noble".to_string()],
+            abilities: vec!["gives_demons_haste".to_string()],
+            impending_cost: None,
+            impending_counters: None,
+        });
+
+        let ardyn_perm = crate::game::zones::Permanent::new(ardyn, 0); // Entered turn 0
+        state.battlefield.add_permanent(ardyn_perm);
+
+        // Add a Demon that entered this turn (has summoning sickness normally)
+        let demon = Card::Creature(CreatureCard {
+            base: BaseCard {
+                name: "Bringer of the Last Gift".to_string(),
+                mana_cost: Default::default(),
+                mana_value: 8,
+            },
+            power: 6,
+            toughness: 6,
+            is_legendary: false,
+            creature_types: vec!["Vampire".to_string(), "Demon".to_string()],
+            abilities: vec![],
+            impending_cost: None,
+            impending_counters: None,
+        });
+
+        let demon_perm = crate::game::zones::Permanent::new(demon, 1); // Entered this turn
+        state.battlefield.add_permanent(demon_perm);
+
+        let damage = simulate_combat(&mut state, false);
+        // Demon should attack with haste (6) + Ardyn can attack (4) = 10
+        assert_eq!(damage, 10);
+        assert_eq!(state.opponent_life, 10);
+    }
+
+    #[test]
+    fn test_demon_no_haste_without_ardyn() {
+        let mut state = GameState::new();
+        state.turn = 1;
+
+        // Add a Demon that entered this turn (has summoning sickness)
+        let demon = Card::Creature(CreatureCard {
+            base: BaseCard {
+                name: "Bringer of the Last Gift".to_string(),
+                mana_cost: Default::default(),
+                mana_value: 8,
+            },
+            power: 6,
+            toughness: 6,
+            is_legendary: false,
+            creature_types: vec!["Vampire".to_string(), "Demon".to_string()],
+            abilities: vec![],
+            impending_cost: None,
+            impending_counters: None,
+        });
+
+        let demon_perm = crate::game::zones::Permanent::new(demon, 1); // Entered this turn
+        state.battlefield.add_permanent(demon_perm);
+
+        let damage = simulate_combat(&mut state, false);
+        // Demon can't attack without Ardyn (summoning sickness)
+        assert_eq!(damage, 0);
+        assert_eq!(state.opponent_life, 20);
+    }
+
+    #[test]
+    fn test_lifelink_with_ardyn() {
+        let mut state = GameState::new();
+        state.turn = 2;
+
+        // Add Ardyn to battlefield
+        let ardyn = Card::Creature(CreatureCard {
+            base: BaseCard {
+                name: "Ardyn, the Usurper".to_string(),
+                mana_cost: Default::default(),
+                mana_value: 8,
+            },
+            power: 4,
+            toughness: 4,
+            is_legendary: true,
+            creature_types: vec!["Elder".to_string(), "Human".to_string(), "Noble".to_string()],
+            abilities: vec!["gives_demons_lifelink".to_string()],
+            impending_cost: None,
+            impending_counters: None,
+        });
+
+        let ardyn_perm = crate::game::zones::Permanent::new(ardyn, 1);
+        state.battlefield.add_permanent(ardyn_perm);
+
+        // Add a Demon that entered last turn (no summoning sickness)
+        let demon = Card::Creature(CreatureCard {
+            base: BaseCard {
+                name: "Bringer of the Last Gift".to_string(),
+                mana_cost: Default::default(),
+                mana_value: 8,
+            },
+            power: 6,
+            toughness: 6,
+            is_legendary: false,
+            creature_types: vec!["Vampire".to_string(), "Demon".to_string()],
+            abilities: vec![],
+            impending_cost: None,
+            impending_counters: None,
+        });
+
+        let demon_perm = crate::game::zones::Permanent::new(demon, 1);
+        state.battlefield.add_permanent(demon_perm);
+
+        let initial_life = state.life;
+        let damage = simulate_combat(&mut state, false);
+
+        // Demon (6) + Ardyn (4) = 10 damage
+        assert_eq!(damage, 10);
+        // Demon dealt 6 damage with lifelink
+        assert_eq!(state.life, initial_life + 6);
+    }
+
+    #[test]
+    fn test_starscourge_trigger() {
+        let mut state = GameState::new();
+        state.turn = 2;
+
+        // Add Ardyn to battlefield
+        let ardyn = Card::Creature(CreatureCard {
+            base: BaseCard {
+                name: "Ardyn, the Usurper".to_string(),
+                mana_cost: Default::default(),
+                mana_value: 8,
+            },
+            power: 4,
+            toughness: 4,
+            is_legendary: true,
+            creature_types: vec!["Elder".to_string(), "Human".to_string(), "Noble".to_string()],
+            abilities: vec!["starscourge".to_string()],
+            impending_cost: None,
+            impending_counters: None,
+        });
+
+        let ardyn_perm = crate::game::zones::Permanent::new(ardyn, 1);
+        state.battlefield.add_permanent(ardyn_perm);
+
+        // Add Bringer to graveyard
+        let bringer = Card::Creature(CreatureCard {
+            base: BaseCard {
+                name: "Bringer of the Last Gift".to_string(),
+                mana_cost: Default::default(),
+                mana_value: 8,
+            },
+            power: 6,
+            toughness: 6,
+            is_legendary: false,
+            creature_types: vec!["Vampire".to_string(), "Demon".to_string()],
+            abilities: vec![],
+            impending_cost: None,
+            impending_counters: None,
+        });
+
+        state.graveyard.add_card(bringer);
+
+        // Simulate combat - Starscourge should trigger
+        let damage = simulate_combat(&mut state, false);
+
+        // Bringer should be exiled from graveyard
+        assert!(state.graveyard.cards().iter().all(|c| c.name() != "Bringer of the Last Gift"));
+
+        // A 5/5 Demon token should be created
+        let token_count = state.battlefield.permanents().iter()
+            .filter(|p| p.is_copy_of.as_deref() == Some("Bringer of the Last Gift"))
+            .count();
+        assert_eq!(token_count, 1);
+
+        // Token should have attacked (has haste from Ardyn)
+        // Ardyn (4) + Starscourge token (5) = 9 damage
+        assert_eq!(damage, 9);
     }
 }
 

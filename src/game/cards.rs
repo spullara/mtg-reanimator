@@ -1386,12 +1386,32 @@ pub fn resolve_formidable_speaker_etb(state: &mut GameState, rng: &mut crate::rn
     }
 }
 
+/// Check if Ardyn, the Usurper is on the battlefield
+fn has_ardyn_on_battlefield(state: &GameState) -> bool {
+    state.battlefield.permanents().iter().any(|p| {
+        p.card.name() == "Ardyn, the Usurper"
+            || p.is_copy_of.as_deref() == Some("Ardyn, the Usurper")
+    })
+}
+
+/// Check if a creature card is a Demon
+fn is_creature_demon(card: &Card) -> bool {
+    match card {
+        Card::Creature(c) => c.creature_types.iter().any(|t| t == "Demon"),
+        _ => false,
+    }
+}
+
 /// Calculate total damage from the combo if cast now
 ///
 /// Damage sources:
 /// 1. Terror triggers from creatures entering (both from battlefield and graveyard)
 /// 2. Combat damage from creatures already on battlefield (no summoning sickness)
+/// 3. Combat damage from Demons with haste (if Ardyn is on battlefield)
 pub fn calculate_combo_damage(state: &GameState) -> u32 {
+    // Check if Ardyn is on battlefield (Demons get haste)
+    let ardyn_on_battlefield = has_ardyn_on_battlefield(state);
+
     // Creatures that would be reanimated from graveyard
     let creatures_in_graveyard: Vec<&Card> = state
         .graveyard
@@ -1457,6 +1477,7 @@ pub fn calculate_combo_damage(state: &GameState) -> u32 {
 
     // Combat damage from creatures that can attack THIS turn (already on battlefield, no summoning sickness)
     // These creatures will attack after we cast the combo in main phase 1
+    // Exception: Demons have haste if Ardyn is on battlefield
     let current_combat_power: u32 = state
         .battlefield
         .permanents()
@@ -1471,8 +1492,16 @@ pub fn calculate_combo_damage(state: &GameState) -> u32 {
                     return false;
                 }
             }
-            // No summoning sickness
-            state.turn > p.turn_entered
+            // Check summoning sickness
+            let has_summoning_sickness = state.turn <= p.turn_entered;
+            if has_summoning_sickness {
+                // Demons get haste from Ardyn
+                if ardyn_on_battlefield && is_creature_demon(&p.card) {
+                    return true; // Can attack despite summoning sickness
+                }
+                return false;
+            }
+            true
         })
         .map(|p| {
             if let Card::Creature(c) = &p.card {
@@ -1483,10 +1512,27 @@ pub fn calculate_combo_damage(state: &GameState) -> u32 {
         })
         .sum();
 
-    // Reanimated creatures have summoning sickness and CAN'T attack this turn
-    // So we don't count them for this turn's damage
+    // Calculate combat damage from reanimated Demons (if Ardyn gives them haste)
+    let reanimated_demon_combat_power: u32 = if ardyn_on_battlefield {
+        // Bringer of the Last Gift is a Demon and would be reanimated
+        // Spider-Man (as a copy of Bringer) is NOT a Demon
+        // Any Demons in graveyard would get haste from Ardyn after reanimate
+        creatures_in_graveyard
+            .iter()
+            .filter(|c| is_creature_demon(c))
+            .map(|c| {
+                if let Card::Creature(creature) = c {
+                    creature.power
+                } else {
+                    0
+                }
+            })
+            .sum()
+    } else {
+        0
+    };
 
-    terror_damage + current_combat_power
+    terror_damage + current_combat_power + reanimated_demon_combat_power
 }
 
 /// Check if casting the combo NOW would be lethal

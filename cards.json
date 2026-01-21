@@ -358,5 +358,28 @@
       "mill_3",
       "return_or_search"
     ]
+  },
+  {
+    "name": "Ardyn, the Usurper",
+    "card_type": "creature",
+    "mana_cost": {
+      "black": 3,
+      "generic": 5
+    },
+    "mana_value": 8,
+    "power": 4,
+    "toughness": 4,
+    "is_legendary": true,
+    "creature_types": [
+      "Elder",
+      "Human",
+      "Noble"
+    ],
+    "abilities": [
+      "gives_demons_haste",
+      "gives_demons_menace",
+      "gives_demons_lifelink",
+      "starscourge"
+    ]
   }
 ]
