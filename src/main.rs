@@ -175,6 +175,7 @@ fn run_simulation(db: &CardDatabase, deck_file: &str, num_games: usize, seed: Op
             .duration_since(std::time::UNIX_EPOCH)
             .unwrap()
             .as_nanos() as u64;
+        println!("Seed: {}", seed);
         (0..num_games)
             .map(|i| run_game(&deck, seed.wrapping_add(i as u64), db, i == 0))
             .collect()

@@ -118,13 +118,8 @@ fn resolve_starscourge(state: &mut GameState, verbose: bool) {
         let mut perm = crate::game::zones::Permanent::new(token, state.turn);
         perm.is_copy_of = Some(creature_name.clone());
 
-        state.battlefield.add_permanent(perm);
-
-        if verbose {
-            println!("[Starscourge] Created a 5/5 Demon token copy of {} (has haste from Ardyn)", creature_name);
-        }
-
-        // Trigger Terror of the Peaks if on battlefield (for the 5/5 token entering)
+        // Count Terrors BEFORE adding the token - Terror of the Peaks triggers on "another creature"
+        // so the token cannot trigger from itself entering
         let terror_count = state.battlefield.permanents().iter()
             .filter(|p| {
                 p.card.name() == "Terror of the Peaks"
@@ -132,6 +127,13 @@ fn resolve_starscourge(state: &mut GameState, verbose: bool) {
             })
             .count() as i32;
 
+        state.battlefield.add_permanent(perm);
+
+        if verbose {
+            println!("[Starscourge] Created a 5/5 Demon token copy of {} (has haste from Ardyn)", creature_name);
+        }
+
+        // Trigger Terror of the Peaks if on battlefield (for the 5/5 token entering)
         if terror_count > 0 {
             let terror_damage = 5 * terror_count; // Token is 5/5
             state.opponent_life -= terror_damage;
