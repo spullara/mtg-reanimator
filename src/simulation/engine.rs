@@ -475,9 +475,21 @@ pub fn main_phase(state: &mut GameState, db: &CardDatabase, verbose: bool, rng: 
         has_untapped_land_with_u
     };
 
-    let should_prioritize_discard_spell = has_bringer_or_terror_in_hand
+    // Also check: Bringer in graveyard (combo ready) + Speaker in hand + no Spider-Man
+    // -> Speaker should be prioritized to tutor for Spider-Man!
+    let has_bringer_in_graveyard_early = state.graveyard.cards().iter()
+        .any(|c| c.name() == "Bringer of the Last Gift");
+    let has_spider_man_in_hand_early = state.hand.cards().iter()
+        .any(|c| c.name() == "Superior Spider-Man");
+    let speaker_can_tutor_for_combo = has_bringer_in_graveyard_early
+        && !has_spider_man_in_hand_early
+        && formidable_speaker_in_hand.is_some()
+        && formidable_speaker_in_hand.map_or(false, |s| mana::can_cast_spell(s, state));
+
+    let should_prioritize_discard_spell = (has_bringer_or_terror_in_hand
         && (kiora_in_hand.is_some() || formidable_speaker_in_hand.is_some())
-        && could_cast_kiora_after_land_drop();
+        && could_cast_kiora_after_land_drop())
+        || speaker_can_tutor_for_combo;
 
     // SPECIAL CASE: Analyze the Pollen early casting
     // Cast it early (without evidence) if:
@@ -773,6 +785,17 @@ pub fn main_phase(state: &mut GameState, db: &CardDatabase, verbose: bool, rng: 
                     return std::cmp::Ordering::Less;
                 }
                 if b_card.name() == "Superior Spider-Man" {
+                    return std::cmp::Ordering::Greater;
+                }
+            }
+
+            // Priority 1.5: Formidable Speaker if Bringer in GY but no Spider-Man
+            // (Speaker can discard something to tutor for Spider-Man!)
+            if has_bringer_in_graveyard && !has_spider_man_in_hand {
+                if a_card.name() == "Formidable Speaker" {
+                    return std::cmp::Ordering::Less;
+                }
+                if b_card.name() == "Formidable Speaker" {
                     return std::cmp::Ordering::Greater;
                 }
             }
