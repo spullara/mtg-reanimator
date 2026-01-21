@@ -57,9 +57,11 @@ pub fn draw_phase(state: &mut GameState, verbose: bool) {
         }
     }
     
-    // Remove in reverse order to preserve indices
+    // Remove in reverse order to preserve indices, putting sagas in graveyard
     for idx in indices_to_remove.into_iter().rev() {
-        state.battlefield.remove_permanent(idx);
+        if let Some(permanent) = state.battlefield.remove_permanent(idx) {
+            state.graveyard.add_card(permanent.card);
+        }
     }
 }
 
