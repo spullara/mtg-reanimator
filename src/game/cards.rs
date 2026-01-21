@@ -1311,7 +1311,11 @@ pub fn resolve_formidable_speaker_etb(state: &mut GameState, rng: &mut crate::rn
     let mut tutor_target: Option<String> = None;
 
     // Priority 1: Discard Bringer/Terror/Ardyn to get Spider-Man
-    if !has_spider_man {
+    // Only if Spider-Man is actually in the library
+    let spider_in_library = state.library.cards().iter()
+        .any(|c| c.name() == "Superior Spider-Man");
+
+    if !has_spider_man && spider_in_library {
         if has_bringer_in_hand {
             discard_target = Some("Bringer of the Last Gift".to_string());
             tutor_target = Some("Superior Spider-Man".to_string());
@@ -1320,6 +1324,42 @@ pub fn resolve_formidable_speaker_etb(state: &mut GameState, rng: &mut crate::rn
             tutor_target = Some("Superior Spider-Man".to_string());
         } else if has_ardyn_in_hand {
             discard_target = Some("Ardyn, the Usurper".to_string());
+            tutor_target = Some("Superior Spider-Man".to_string());
+        }
+    }
+
+    // Priority 1.5: If Spider-Man is NOT in hand, Bringer IS in graveyard (combo is ready!),
+    // discard ANY non-essential card to tutor for Spider-Man.
+    // This handles late-game scenarios where we've already discarded Bringer/Terror via milling
+    // but have mill creatures in hand that are less valuable than completing the combo.
+    if tutor_target.is_none() && !has_spider_man && has_bringer_in_gy && spider_in_library {
+        // Count mill creatures in hand to find excess
+        let kiora_count = state.hand.cards().iter()
+            .filter(|c| c.name() == "Kiora, the Rising Tide")
+            .count();
+        let town_greeter_count = state.hand.cards().iter()
+            .filter(|c| c.name() == "Abuelo's Awakening" || c.name() == "Town Greeter")
+            .count();
+        let has_overlord_in_hand = state.hand.cards().iter()
+            .any(|c| c.name() == "Overlord of the Balemurk");
+
+        // Priority for discarding: excess Kiora > excess Town Greeter > any mill creature
+        if kiora_count > 1 {
+            discard_target = Some("Kiora, the Rising Tide".to_string());
+            tutor_target = Some("Superior Spider-Man".to_string());
+        } else if town_greeter_count > 1 {
+            discard_target = Some("Town Greeter".to_string());
+            tutor_target = Some("Superior Spider-Man".to_string());
+        } else if kiora_count >= 1 {
+            // We have exactly 1 Kiora - discard it because combo is more important
+            discard_target = Some("Kiora, the Rising Tide".to_string());
+            tutor_target = Some("Superior Spider-Man".to_string());
+        } else if town_greeter_count >= 1 {
+            discard_target = Some("Town Greeter".to_string());
+            tutor_target = Some("Superior Spider-Man".to_string());
+        } else if has_overlord_in_hand {
+            // Overlord is also a valid discard target if that's all we have
+            discard_target = Some("Overlord of the Balemurk".to_string());
             tutor_target = Some("Superior Spider-Man".to_string());
         }
     }
