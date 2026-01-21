@@ -270,64 +270,91 @@ fn parse_mana_color(color_str: &str) -> Result<ManaColor, String> {
 }
 
 /// Check if we can afford a mana cost given the current game state
-/// This checks if we have enough untapped lands to produce the required colors
+/// This uses the same scarcity-based matching algorithm as tap_lands_for_cost
+/// to ensure consistency between "can I cast?" and "actually cast".
 pub fn can_afford_cost(
     cost: &ManaCost,
     state: &GameState,
     for_creature: Option<&CreatureCard>,
 ) -> bool {
-    let max_mana = state
-        .battlefield
-        .permanents()
+    // Collect all land info (same as tap_lands_for_cost)
+    let land_info: Vec<(usize, ColorFlags)> = state.battlefield.permanents()
         .iter()
-        .filter(|p| matches!(p.card, Card::Land(_)) && !p.tapped)
-        .count() as u32;
+        .enumerate()
+        .filter_map(|(idx, p)| {
+            if p.tapped || !matches!(p.card, Card::Land(_)) {
+                return None;
+            }
+            let colors = can_tap_for_mana(p, state, for_creature);
+            if colors.is_empty() {
+                return None;
+            }
+            Some((idx, colors))
+        })
+        .collect();
 
     // Quick check: do we have enough total mana?
     let total_cost = cost.white + cost.blue + cost.black + cost.red + cost.green + cost.colorless + cost.generic;
-
-    if max_mana < total_cost {
+    if (land_info.len() as u32) < total_cost {
         return false;
     }
 
-    // Check if we can produce each required color
-    let mut color_counts = ManaPool::new();
+    // Track which lands are "used" in our simulated assignment
+    let mut used_indices: std::collections::HashSet<usize> = std::collections::HashSet::new();
 
-    for permanent in state.battlefield.permanents() {
-        if permanent.tapped {
-            continue;
+    // Build list of (color, amount) pairs, only for colors we need
+    let mut colors_to_pay: Vec<(ManaColor, u32)> = Vec::new();
+    if cost.white > 0 { colors_to_pay.push((ManaColor::White, cost.white)); }
+    if cost.blue > 0 { colors_to_pay.push((ManaColor::Blue, cost.blue)); }
+    if cost.black > 0 { colors_to_pay.push((ManaColor::Black, cost.black)); }
+    if cost.red > 0 { colors_to_pay.push((ManaColor::Red, cost.red)); }
+    if cost.green > 0 { colors_to_pay.push((ManaColor::Green, cost.green)); }
+    if cost.colorless > 0 { colors_to_pay.push((ManaColor::Colorless, cost.colorless)); }
+
+    // Sort colors by scarcity: count how many lands can produce each color
+    colors_to_pay.sort_by_key(|(color, _amount)| {
+        land_info.iter().filter(|(_, colors)| colors.contains(*color)).count()
+    });
+
+    // Process colors in order of scarcity (same algorithm as tap_lands_for_cost)
+    for (color, amount) in &colors_to_pay {
+        let mut remaining = *amount;
+
+        // Collect lands that can produce this color, sorted by flexibility
+        let mut candidates: Vec<(usize, u32)> = land_info.iter()
+            .filter(|(idx, colors)| !used_indices.contains(idx) && colors.contains(*color))
+            .map(|(idx, colors)| (*idx, colors.count()))
+            .collect();
+        
+        // Sort by flexibility: prefer lands with fewer colors (less flexible)
+        candidates.sort_by_key(|(_, color_count)| *color_count);
+
+        for (idx, _) in candidates {
+            if remaining == 0 {
+                break;
+            }
+            used_indices.insert(idx);
+            remaining -= 1;
         }
-        if !matches!(permanent.card, Card::Land(_)) {
-            continue;
+
+        if remaining > 0 {
+            return false;
         }
-        let colors = can_tap_for_mana(permanent, state, for_creature);
-        if colors.has_white() { color_counts.white += 1; }
-        if colors.has_blue() { color_counts.blue += 1; }
-        if colors.has_black() { color_counts.black += 1; }
-        if colors.has_red() { color_counts.red += 1; }
-        if colors.has_green() { color_counts.green += 1; }
-        if colors.has_colorless() { color_counts.colorless += 1; }
     }
 
-    // Check colored requirements
-    if cost.white > 0 && color_counts.white < cost.white {
-        return false;
-    }
-    if cost.blue > 0 && color_counts.blue < cost.blue {
-        return false;
-    }
-    if cost.black > 0 && color_counts.black < cost.black {
-        return false;
-    }
-    if cost.red > 0 && color_counts.red < cost.red {
-        return false;
-    }
-    if cost.green > 0 && color_counts.green < cost.green {
+    // Check if we can pay generic with remaining lands
+    let generic_remaining = cost.generic;
+    let available_for_generic = land_info.iter()
+        .filter(|(idx, _)| !used_indices.contains(idx))
+        .count() as u32;
+    
+    if available_for_generic < generic_remaining {
         return false;
     }
 
     true
 }
+
 
 /// Check if a spell can be cast with the current game state
 pub fn can_cast_spell(card: &Card, state: &GameState) -> bool {
@@ -355,17 +382,15 @@ pub fn can_cast_spell(card: &Card, state: &GameState) -> bool {
 
 /// Tap lands to pay a mana cost. Returns true if successful.
 /// This is the key function that taps lands DURING casting, not before.
-/// Strategy: Use lands that only produce the required colors first (to preserve flexibility)
+/// 
+/// Strategy: Process colors in order of SCARCITY (fewest available lands first).
+/// This ensures we don't "waste" flexible lands on colors that have many options.
+/// When picking a land for a color, prefer lands with fewer total colors (less flexible).
 pub fn tap_lands_for_cost(
     cost: &ManaCost,
     state: &mut GameState,
     for_creature: Option<&CreatureCard>,
 ) -> bool {
-    // First check if we can afford the cost
-    if !can_afford_cost(cost, state, for_creature) {
-        return false;
-    }
-
     // Collect all land info FIRST (before any mutations)
     // Each entry is (index, colors_this_land_produces as bitflags)
     let land_info: Vec<(usize, ColorFlags)> = state.battlefield.permanents()
@@ -383,75 +408,80 @@ pub fn tap_lands_for_cost(
         })
         .collect();
 
+    // Quick check: do we have enough total mana?
+    let total_cost = cost.white + cost.blue + cost.black + cost.red + cost.green + cost.colorless + cost.generic;
+    if (land_info.len() as u32) < total_cost {
+        return false;
+    }
+
     // Track which lands we'll tap (by index)
     let mut lands_to_tap: Vec<(usize, char)> = Vec::new();
     let mut used_indices: std::collections::HashSet<usize> = std::collections::HashSet::new();
 
-    // Pay colored costs first
-    let colors_to_pay = [
-        (ManaColor::White, cost.white),
-        (ManaColor::Blue, cost.blue),
-        (ManaColor::Black, cost.black),
-        (ManaColor::Red, cost.red),
-        (ManaColor::Green, cost.green),
-        (ManaColor::Colorless, cost.colorless),
-    ];
+    // Build list of (color, amount) pairs, only for colors we need
+    let mut colors_to_pay: Vec<(ManaColor, u32)> = Vec::new();
+    if cost.white > 0 { colors_to_pay.push((ManaColor::White, cost.white)); }
+    if cost.blue > 0 { colors_to_pay.push((ManaColor::Blue, cost.blue)); }
+    if cost.black > 0 { colors_to_pay.push((ManaColor::Black, cost.black)); }
+    if cost.red > 0 { colors_to_pay.push((ManaColor::Red, cost.red)); }
+    if cost.green > 0 { colors_to_pay.push((ManaColor::Green, cost.green)); }
+    if cost.colorless > 0 { colors_to_pay.push((ManaColor::Colorless, cost.colorless)); }
 
+    // Sort colors by scarcity: count how many lands can produce each color
+    colors_to_pay.sort_by_key(|(color, _amount)| {
+        land_info.iter().filter(|(_, colors)| colors.contains(*color)).count()
+    });
+
+    // Process colors in order of scarcity
     for (color, amount) in &colors_to_pay {
         let mut remaining = *amount;
 
-        // Prefer lands that ONLY produce this color (preserve flexibility)
-        for (idx, colors) in &land_info {
+        // Collect lands that can produce this color, sorted by flexibility (fewer colors = less flexible = use first)
+        let mut candidates: Vec<(usize, u32)> = land_info.iter()
+            .filter(|(idx, colors)| !used_indices.contains(idx) && colors.contains(*color))
+            .map(|(idx, colors)| (*idx, colors.count()))
+            .collect();
+        
+        // Sort by flexibility: prefer lands with fewer colors (less flexible)
+        candidates.sort_by_key(|(_, color_count)| *color_count);
+
+        for (idx, _) in candidates {
             if remaining == 0 {
                 break;
             }
-            if used_indices.contains(idx) {
-                continue;
-            }
-            if colors.is_single_color() && colors.contains(*color) {
-                lands_to_tap.push((*idx, color.to_char()));
-                used_indices.insert(*idx);
-                remaining -= 1;
-            }
+            lands_to_tap.push((idx, color.to_char()));
+            used_indices.insert(idx);
+            remaining -= 1;
         }
 
-        // Then use multi-color lands
-        if remaining > 0 {
-            for (idx, colors) in &land_info {
-                if remaining == 0 {
-                    break;
-                }
-                if used_indices.contains(idx) {
-                    continue;
-                }
-                if colors.contains(*color) {
-                    lands_to_tap.push((*idx, color.to_char()));
-                    used_indices.insert(*idx);
-                    remaining -= 1;
-                }
-            }
-        }
-
-        // If we still have remaining, something went wrong with can_afford_cost
         if remaining > 0 {
             return false;
         }
     }
 
-    // Pay generic with remaining untapped lands
+    // Pay generic with remaining untapped lands (prefer least flexible)
     let mut generic_remaining = cost.generic;
-    for (idx, colors) in &land_info {
+    let mut generic_candidates: Vec<(usize, u32)> = land_info.iter()
+        .filter(|(idx, _)| !used_indices.contains(idx))
+        .map(|(idx, colors)| (*idx, colors.count()))
+        .collect();
+    generic_candidates.sort_by_key(|(_, color_count)| *color_count);
+
+    for (idx, _) in generic_candidates {
         if generic_remaining == 0 {
             break;
         }
-        if used_indices.contains(idx) {
-            continue;
+        if let Some((_, colors)) = land_info.iter().find(|(i, _)| *i == idx) {
+            if let Some(first) = colors.first_color() {
+                lands_to_tap.push((idx, first.to_char()));
+                used_indices.insert(idx);
+                generic_remaining -= 1;
+            }
         }
-        if let Some(first) = colors.first_color() {
-            lands_to_tap.push((*idx, first.to_char()));
-            used_indices.insert(*idx);
-            generic_remaining -= 1;
-        }
+    }
+
+    if generic_remaining > 0 {
+        return false;
     }
 
     // Now actually tap the lands and add mana to pool
@@ -465,6 +495,7 @@ pub fn tap_lands_for_cost(
     // Now pay the actual cost from the pool
     state.mana_pool.pay(cost)
 }
+
 
 #[cfg(test)]
 mod tests {

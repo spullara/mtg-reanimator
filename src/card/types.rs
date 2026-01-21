@@ -112,12 +112,6 @@ impl ColorFlags {
         self.0.count_ones()
     }
 
-    /// Check if exactly one color is set
-    #[inline]
-    pub const fn is_single_color(&self) -> bool {
-        self.count() == 1
-    }
-
     /// Check if a specific ManaColor is present
     #[inline]
     pub fn contains(&self, color: ManaColor) -> bool {
