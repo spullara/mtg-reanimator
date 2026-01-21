@@ -10,8 +10,8 @@ pub fn start_turn(state: &mut GameState) {
     state.untap_all();
 }
 
-/// Draw phase: draw 1 card (skip on turn 1 if on play), advance saga counters
-pub fn draw_phase(state: &mut GameState, verbose: bool) {
+/// Draw phase: draw 1 card (skip on turn 1 if on play)
+pub fn draw_phase(state: &mut GameState) {
     // Skip draw on turn 1 if on the play
     if state.turn == 1 && state.on_the_play {
         return;
@@ -19,10 +19,14 @@ pub fn draw_phase(state: &mut GameState, verbose: bool) {
 
     // Draw a card
     state.draw_card();
+}
 
+/// Precombat main phase start: advance saga counters and resolve chapters
+/// According to MTG rules, saga lore counters are added at the beginning of the precombat main phase
+pub fn precombat_main_phase_start(state: &mut GameState, verbose: bool) {
     // First pass: collect saga info (names, turn_entered) without modifying
     let mut sagas_to_advance: Vec<(usize, String, usize)> = Vec::new(); // (index, name, max_chapters)
-    
+
     for (i, permanent) in state.battlefield.permanents().iter().enumerate() {
         if let Card::Saga(saga) = &permanent.card {
             // Only advance if saga was cast before this turn
@@ -31,23 +35,23 @@ pub fn draw_phase(state: &mut GameState, verbose: bool) {
             }
         }
     }
-    
+
     // Second pass: advance counters and collect chapters to resolve
     let mut saga_chapters: Vec<(String, usize)> = Vec::new();
-    
+
     for (idx, name, _max_chapters) in &sagas_to_advance {
         let permanent = &mut state.battlefield.permanents_mut()[*idx];
         permanent.add_counter(CounterType::Time, 1);
         let chapter = permanent.get_counter(CounterType::Time) as usize;
         saga_chapters.push((name.clone(), chapter));
     }
-    
+
     // Third pass: resolve chapters
     for (saga_name, chapter) in &saga_chapters {
         cards::resolve_saga_chapter(state, saga_name, *chapter as u32, verbose);
     }
-    
-    // Fourth pass: remove completed sagas
+
+    // Fourth pass: remove completed sagas (put in graveyard)
     let mut indices_to_remove: Vec<usize> = Vec::new();
     for (idx, _name, max_chapters) in &sagas_to_advance {
         let permanent = &state.battlefield.permanents()[*idx];
@@ -56,7 +60,7 @@ pub fn draw_phase(state: &mut GameState, verbose: bool) {
             indices_to_remove.push(*idx);
         }
     }
-    
+
     // Remove in reverse order to preserve indices, putting sagas in graveyard
     for idx in indices_to_remove.into_iter().rev() {
         if let Some(permanent) = state.battlefield.remove_permanent(idx) {
@@ -65,10 +69,10 @@ pub fn draw_phase(state: &mut GameState, verbose: bool) {
     }
 }
 
-/// Upkeep phase: trigger upkeep effects (saga counter advancement if needed)
+/// Upkeep phase: trigger upkeep effects
 pub fn upkeep_phase(_state: &mut GameState) {
     // Upkeep effects would be triggered here
-    // For now, saga advancement happens in draw_phase
+    // Saga advancement happens in precombat_main_phase_start (per MTG rules)
 }
 
 /// End phase: decrement time counters (impending creatures only, NOT sagas), discard to 7

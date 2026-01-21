@@ -1,6 +1,6 @@
 use crate::card::{Card, CardDatabase, ColorFlags, LandCard, LandSubtype, ManaColor};
 use crate::game::state::GameState;
-use crate::game::turns::{start_turn, draw_phase, upkeep_phase, end_phase};
+use crate::game::turns::{start_turn, draw_phase, upkeep_phase, end_phase, precombat_main_phase_start};
 use crate::game::cards;
 use crate::game::mana;
 use crate::simulation::decisions::DecisionEngine;
@@ -100,7 +100,7 @@ pub fn execute_turn(state: &mut GameState, db: &CardDatabase, verbose: bool, rng
     // Draw phase
     state.phase = crate::game::state::Phase::Draw;
     let hand_before = state.hand.size();
-    draw_phase(state, verbose);
+    draw_phase(state);
 
     if verbose {
         if state.hand.size() > hand_before {
@@ -115,6 +115,10 @@ pub fn execute_turn(state: &mut GameState, db: &CardDatabase, verbose: bool, rng
 
     // Main phase 1: Play lands and cast spells
     state.phase = crate::game::state::Phase::Main1;
+
+    // Precombat main phase start: advance saga counters and resolve chapters
+    // Per MTG rules, saga lore counters are added at the beginning of precombat main phase
+    precombat_main_phase_start(state, verbose);
     if verbose {
         let hand_names: Vec<&str> = state.hand.cards().iter().map(|c| c.name()).collect();
         println!("[Main 1] Hand: {}", hand_names.join(", "));

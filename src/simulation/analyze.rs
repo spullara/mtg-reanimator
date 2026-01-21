@@ -260,7 +260,7 @@ pub fn run_game_to_turn4(
     use crate::simulation::mulligan::resolve_mulligans;
     use crate::rng::GameRng;
     use crate::simulation::engine::execute_turn;
-    use crate::game::turns::{start_turn, draw_phase, upkeep_phase};
+    use crate::game::turns::{start_turn, draw_phase, upkeep_phase, precombat_main_phase_start};
 
     let mut rng = GameRng::new(Some(seed));
     let mut state = GameState::new();
@@ -300,14 +300,15 @@ pub fn run_game_to_turn4(
         execute_turn(&mut state, db, false, &mut rng);
     }
 
-    // Turn 4: only do start_turn (untap), upkeep, and draw - then analyze
-    // This gives us the state at the START of turn 4's main phase
+    // Turn 4: only do start_turn (untap), upkeep, draw, and precombat main start - then analyze
+    // This gives us the state at the START of turn 4's main phase (after saga advancement)
     start_turn(&mut state);
     upkeep_phase(&mut state);
-    draw_phase(&mut state, false);
+    draw_phase(&mut state);
+    precombat_main_phase_start(&mut state, false);
 
     // Analyze state at START of turn 4 main phase
-    // All lands are untapped (from start_turn), we've drawn for the turn
+    // All lands are untapped (from start_turn), we've drawn for the turn, sagas advanced
     analyze_turn4_state(&state)
 }
 
