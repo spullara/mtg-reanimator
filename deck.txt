@@ -1,20 +1,47 @@
-2 Forest
-2 Island
-3 Swamp
-3 Watery Grave
-4 Cavern of Souls
-4 Terror of the Peaks
-1 Restless Cottage
+# MTG Reanimator Deck
+# Generated: 2026-01-20 21:26:51
+# Hash: 6328995c
+#
+# Optimization Results
+# Strategy: weighted
+# Simulations: 5000
+# Win rate: 100.0%
+# Average win turn: 6.287
+#
+# Turn Distribution
+# Turn 4: 79 (1.6%)
+# Turn 5: 962 (19.2%)
+# Turn 6: 2239 (44.8%)
+# Turn 7: 1178 (23.6%)
+# Turn 8: 348 (7.0%)
+# Turn 9: 132 (2.6%)
+# Turn 10: 38 (0.8%)
+# Turn 11: 16 (0.3%)
+# Turn 12: 6 (0.1%)
+# Turn 13: 1 (0.0%)
+# Turn 14: 1 (0.0%)
+
+# Fixed cards (36)
+3 Awaken the Honored Dead
 4 Bringer of the Last Gift
-3 Undercity Sewers
-3 Underground Mortuary
-4 Cache Grab
-4 Overlord of the Balemurk
-4 Kiora, the Rising Tide
+3 Cache Grab
 4 Dredger's Insight
-1 Wastewood Verge
-4 Awaken the Honored Dead
-3 Town Greeter
-1 Analyze the Pollen
-2 Multiversal Passage
+2 Formidable Speaker
+4 Kiora, the Rising Tide
+4 Overlord of the Balemurk
 4 Superior Spider-Man
+4 Terror of the Peaks
+4 Town Greeter
+
+# Lands (24)
+4 Cavern of Souls
+4 Multiversal Passage
+3 Starting Town
+3 Undercity Sewers
+2 Blooming Marsh
+2 Forest
+2 Swamp
+1 Gloomlake Verge
+1 Island
+1 Restless Cottage
+1 Watery Grave
