@@ -1,7 +1,6 @@
 use crate::card::Card;
 use crate::game::zones::{Battlefield, Exile, Graveyard, Hand, Library};
 use crate::game::mana::ManaPool;
-use std::collections::HashMap;
 
 /// Game phases
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -38,9 +37,6 @@ pub struct GameState {
 
     // Mana
     pub mana_pool: ManaPool,
-
-    // Saga tracking (card name -> lore counter count)
-    pub saga_counters: HashMap<String, u32>,
 }
 
 impl GameState {
@@ -58,7 +54,6 @@ impl GameState {
             life: 20,
             opponent_life: 20,
             mana_pool: ManaPool::new(),
-            saga_counters: HashMap::new(),
         }
     }
 

@@ -512,8 +512,15 @@ pub fn cast_spell(
             Ok(())
         }
         Card::Saga(saga) => {
-            // Sagas enter with 1 lore counter
-            state.saga_counters.insert(saga.base.name.clone(), 1);
+            // Add saga to battlefield with 1 lore counter
+            let saga_name = saga.base.name.clone();
+            let mut permanent = Permanent::new(card.clone(), state.turn);
+            permanent.add_counter(CounterType::Time, 1);
+            state.battlefield.add_permanent(permanent);
+            
+            // Resolve Chapter I immediately
+            resolve_saga_chapter(state, &saga_name, 1, verbose);
+            
             Ok(())
         }
         _ => Err("Not a spell card".to_string()),
@@ -1442,6 +1449,107 @@ pub fn calculate_combo_damage(state: &GameState) -> u32 {
 pub fn is_combo_lethal(state: &GameState) -> bool {
     let expected_damage = calculate_combo_damage(state);
     expected_damage >= state.opponent_life as u32
+}
+
+
+/// Resolve a saga chapter ability
+pub fn resolve_saga_chapter(state: &mut GameState, saga_name: &str, chapter: u32, verbose: bool) {
+    if saga_name == "Awaken the Honored Dead" {
+        match chapter {
+            1 => {
+                // Chapter I: Destroy target permanent (skip for goldfishing)
+                if verbose {
+                    println!("    Awaken Chapter I: Destroy target permanent (skipped - no opponent)");
+                }
+            }
+            2 => {
+                // Chapter II: Mill 3
+                if verbose {
+                    println!("    Awaken Chapter II: Mill 3");
+                }
+                let mut milled = Vec::new();
+                for _ in 0..3 {
+                    if let Some(card) = state.library.cards_mut().pop() {
+                        if verbose {
+                            println!("      -> Milled: {}", card.name());
+                        }
+                        milled.push(card);
+                    }
+                }
+                for card in milled {
+                    state.graveyard.add_card(card);
+                }
+            }
+            3 => {
+                // Chapter III: Return creature from graveyard OR search for creature/land
+                if verbose {
+                    println!("    Awaken Chapter III: Return creature or search");
+                }
+                
+                // Check if there's a creature in graveyard to return
+                let creature_in_gy = state.graveyard.cards().iter()
+                    .position(|c| matches!(c, Card::Creature(_)));
+                
+                if let Some(idx) = creature_in_gy {
+                    // Return creature to hand
+                    if let Some(creature) = state.graveyard.remove_card(idx) {
+                        if verbose {
+                            println!("      -> Returned {} from graveyard to hand", creature.name());
+                        }
+                        state.hand.add_card(creature);
+                    }
+                } else {
+                    // Search library for creature or land
+                    if verbose {
+                        println!("      -> No creature in graveyard, searching library");
+                    }
+                    
+                    // Priority: Spider-Man > Kiora > Formidable > Land
+                    let mut target_idx = None;
+                    
+                    // Look for Spider-Man first
+                    if target_idx.is_none() {
+                        target_idx = state.library.cards().iter()
+                            .position(|c| c.name() == "Superior Spider-Man");
+                    }
+                    
+                    // Then Kiora
+                    if target_idx.is_none() {
+                        target_idx = state.library.cards().iter()
+                            .position(|c| c.name() == "Kiora, the Rising Tide");
+                    }
+                    
+                    // Then Formidable Speaker
+                    if target_idx.is_none() {
+                        target_idx = state.library.cards().iter()
+                            .position(|c| c.name() == "Formidable Speaker");
+                    }
+                    
+                    // Finally any land
+                    if target_idx.is_none() {
+                        target_idx = state.library.cards().iter()
+                            .position(|c| matches!(c, Card::Land(_)));
+                    }
+                    
+                    if let Some(idx) = target_idx {
+                        let card = state.library.cards_mut().remove(idx);
+                        if verbose {
+                            println!("      -> Found and added to hand: {}", card.name());
+                        }
+                        state.hand.add_card(card);
+                        
+                        // Shuffle library (no RNG needed for goldfishing)
+                        // In a real game, would shuffle here
+                    }
+                }
+            }
+            _ => {
+                if verbose {
+                    println!("    Unknown chapter {} for {}", chapter, saga_name);
+                }
+            }
+        }
+    }
 }
 
 #[cfg(test)]
