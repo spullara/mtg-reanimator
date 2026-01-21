@@ -51,9 +51,13 @@ pub fn play_land(state: &mut GameState, card: &Card, verbose: bool) -> Result<()
             enters_tapped = state.turn > 3;
         }
         LandSubtype::Utility => {
-            // Verge lands: enter untapped if revealed land type
-            // Simplified: always enter untapped
-            enters_tapped = false;
+            // Verge lands (Wastewood Verge, Gloomlake Verge): simplified to always enter untapped
+            // Other utility lands (Restless Cottage, Cavern, Passage): use card definition
+            let is_verge = land.base.name.ends_with("Verge");
+            if is_verge {
+                enters_tapped = false;
+            }
+            // Otherwise use the card's enters_tapped value
         }
         _ => {} // Basic, Surveil use enters_tapped from card definition
     }

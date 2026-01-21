@@ -54,6 +54,15 @@ impl DecisionEngine {
                     state.battlefield.permanents().iter().filter(|p| matches!(p.card, Card::Land(_))).count() >= 3
                 }
                 LandSubtype::Town => state.turn > 3,
+                LandSubtype::Utility => {
+                    // Verge lands: simplified to always enter untapped
+                    // Other utility lands: use card definition
+                    if land.base.name.ends_with("Verge") {
+                        false
+                    } else {
+                        land.enters_tapped
+                    }
+                }
                 _ => land.enters_tapped,
             }
         };

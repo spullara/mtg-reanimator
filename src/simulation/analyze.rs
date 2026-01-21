@@ -118,6 +118,15 @@ pub fn analyze_turn4_state(state: &GameState) -> Turn4Analysis {
                     // Shock lands can pay 2 life to enter untapped
                     state.life <= 2
                 }
+                LandSubtype::Utility => {
+                    // Verge lands: simplified to always enter untapped
+                    // Other utility lands: use card definition
+                    if land.base.name.ends_with("Verge") {
+                        false
+                    } else {
+                        land.enters_tapped
+                    }
+                }
                 _ => land.enters_tapped,
             };
 
