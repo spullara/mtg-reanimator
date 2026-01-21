@@ -3,6 +3,26 @@ use crate::game::state::GameState;
 use crate::game::zones::{CounterType, Permanent};
 use crate::simulation::decisions::DecisionEngine;
 
+/// Intern card names to static strings for zero-allocation copying
+/// This uses a static lookup for known card names
+pub fn intern_card_name(name: &str) -> &'static str {
+    match name {
+        "Bringer of the Last Gift" => "Bringer of the Last Gift",
+        "Ardyn, the Usurper" => "Ardyn, the Usurper",
+        "Terror of the Peaks" => "Terror of the Peaks",
+        "Superior Spider-Man" => "Superior Spider-Man",
+        "Kiora, the Rising Tide" => "Kiora, the Rising Tide",
+        "Atraxa, Grand Unifier" => "Atraxa, Grand Unifier",
+        "Overlord of the Balemurk" => "Overlord of the Balemurk",
+        "Dredger's Insight" => "Dredger's Insight",
+        "Town Greeter" => "Town Greeter",
+        "Formidable Speaker" => "Formidable Speaker",
+        // Fallback: leak the string to get a static reference
+        // This is acceptable because card names are a small, fixed set
+        _ => Box::leak(name.to_string().into_boxed_str()),
+    }
+}
+
 /// Check if a creature has impending counters (enters as enchantment)
 pub fn has_impending(card: &Card) -> bool {
     match card {
@@ -726,7 +746,7 @@ pub fn process_etb_triggers_verbose(
                     }
 
                     // Copy Bringer! (Spider-Man stays 4/4 but gains Bringer's types and triggers ETB)
-                    permanent.is_copy_of = Some("Bringer of the Last Gift".to_string());
+                    permanent.is_copy_of = Some("Bringer of the Last Gift");
 
                     // Exile the copied card
                     if let Some(bringer) = state.graveyard.remove_card(idx) {
@@ -754,7 +774,7 @@ pub fn process_etb_triggers_verbose(
                     }
 
                     // Copy Ardyn (Spider-Man stays 4/4 but gains Demon type for haste and triggers Starscourge)
-                    permanent.is_copy_of = Some("Ardyn, the Usurper".to_string());
+                    permanent.is_copy_of = Some("Ardyn, the Usurper");
 
                     // Exile Ardyn from graveyard
                     if let Some(ardyn) = state.graveyard.remove_card(idx) {
@@ -789,7 +809,7 @@ pub fn process_etb_triggers_verbose(
                         }
 
                         // Copy the mill creature (Spider-Man stays 4/4 but triggers the copied creature's ETB)
-                        permanent.is_copy_of = Some(creature_name.clone());
+                        permanent.is_copy_of = Some(intern_card_name(&creature_name));
 
                         // Exile the copied card
                         if let Some(creature) = state.graveyard.remove_card(idx) {
@@ -895,7 +915,7 @@ pub fn resolve_bringer_etb(state: &mut GameState, rng: &mut crate::rng::GameRng,
     let spider_man_being_reanimated = creatures_to_reanimate.iter()
         .any(|c| c.name() == "Superior Spider-Man");
 
-    let spider_man_copy_target: Option<String> = if spider_man_being_reanimated {
+    let spider_man_copy_target: Option<&'static str> = if spider_man_being_reanimated {
         // Look for Terror of the Peaks in graveyard to copy
         // Note: Terror might also be in creatures_to_reanimate, but Spider-Man
         // copies from graveyard, so we check if Terror is there
@@ -914,7 +934,7 @@ pub fn resolve_bringer_etb(state: &mut GameState, rng: &mut crate::rng::GameRng,
                     state.exile.add_card(terror);
                 }
             }
-            Some("Terror of the Peaks".to_string())
+            Some("Terror of the Peaks")
         } else {
             if verbose {
                 println!("    Superior Spider-Man (reanimated) enters as a 4/4 (no Terror to copy)");
@@ -934,8 +954,8 @@ pub fn resolve_bringer_etb(state: &mut GameState, rng: &mut crate::rng::GameRng,
 
         // Apply Spider-Man's copy if this is Spider-Man
         if creature.name() == "Superior Spider-Man" {
-            if let Some(ref copy_target) = spider_man_copy_target {
-                perm.is_copy_of = Some(copy_target.clone());
+            if let Some(copy_target) = spider_man_copy_target {
+                perm.is_copy_of = Some(copy_target);
             }
         }
 

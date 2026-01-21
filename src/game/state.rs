@@ -90,7 +90,21 @@ impl GameState {
         self.mana_pool.clear();
     }
 
-
+    /// Reset game state for reuse without reallocating
+    pub fn reset(&mut self) {
+        self.library = Library::new();  // We'll optimize this more later
+        self.hand = Hand::new();
+        self.graveyard = Graveyard::new();
+        self.battlefield = Battlefield::new();
+        self.exile = Exile::new();
+        self.turn = 0;
+        self.phase = Phase::Untap;
+        self.on_the_play = false;
+        self.land_played_this_turn = false;
+        self.life = 20;
+        self.opponent_life = 20;
+        self.mana_pool = ManaPool::new();
+    }
 }
 
 impl Default for GameState {

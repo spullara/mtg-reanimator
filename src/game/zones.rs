@@ -16,7 +16,7 @@ pub struct Permanent {
     pub counters: HashMap<CounterType, u32>,
     pub chosen_type: Option<String>,      // For Cavern of Souls
     pub chosen_basic_type: Option<String>, // For Multiversal Passage
-    pub is_copy_of: Option<String>,       // For Superior Spider-Man (tracks copied creature for types/triggers, but Spider-Man stays 4/4)
+    pub is_copy_of: Option<&'static str>, // For Superior Spider-Man (tracks copied creature for types/triggers, but Spider-Man stays 4/4)
 }
 
 impl Permanent {
@@ -63,6 +63,14 @@ pub struct Library {
 impl Library {
     pub fn new() -> Self {
         Library { cards: Vec::new() }
+    }
+
+    pub fn with_capacity(cap: usize) -> Self {
+        Library { cards: Vec::with_capacity(cap) }
+    }
+
+    pub fn clear(&mut self) {
+        self.cards.clear();
     }
 
     pub fn add_card(&mut self, card: Card) {
@@ -124,6 +132,14 @@ impl Hand {
         Hand { cards: Vec::new() }
     }
 
+    pub fn with_capacity(cap: usize) -> Self {
+        Hand { cards: Vec::with_capacity(cap) }
+    }
+
+    pub fn clear(&mut self) {
+        self.cards.clear();
+    }
+
     pub fn add_card(&mut self, card: Card) {
         self.cards.push(card);
     }
@@ -154,6 +170,14 @@ pub struct Graveyard {
 impl Graveyard {
     pub fn new() -> Self {
         Graveyard { cards: Vec::new() }
+    }
+
+    pub fn with_capacity(cap: usize) -> Self {
+        Graveyard { cards: Vec::with_capacity(cap) }
+    }
+
+    pub fn clear(&mut self) {
+        self.cards.clear();
     }
 
     pub fn add_card(&mut self, card: Card) {
@@ -190,6 +214,16 @@ impl Battlefield {
         }
     }
 
+    pub fn with_capacity(cap: usize) -> Self {
+        Battlefield {
+            permanents: Vec::with_capacity(cap),
+        }
+    }
+
+    pub fn clear(&mut self) {
+        self.permanents.clear();
+    }
+
     pub fn add_permanent(&mut self, permanent: Permanent) {
         self.permanents.push(permanent);
     }
@@ -222,10 +256,16 @@ impl Exile {
         Exile { cards: Vec::new() }
     }
 
+    pub fn with_capacity(cap: usize) -> Self {
+        Exile { cards: Vec::with_capacity(cap) }
+    }
+
+    pub fn clear(&mut self) {
+        self.cards.clear();
+    }
+
     pub fn add_card(&mut self, card: Card) {
         self.cards.push(card);
     }
-
-
 }
 

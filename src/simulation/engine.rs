@@ -60,8 +60,7 @@ fn is_demon(permanent: &crate::game::zones::Permanent) -> bool {
     // Check if this is a copy of a known Demon
     let copy_is_demon = permanent
         .is_copy_of
-        .as_ref()
-        .map(|name| KNOWN_DEMONS.contains(&name.as_str()))
+        .map(|name| KNOWN_DEMONS.contains(&name))
         .unwrap_or(false);
 
     card_is_demon || copy_is_demon
@@ -129,7 +128,7 @@ fn resolve_starscourge(state: &mut GameState, verbose: bool) {
         });
 
         let mut perm = crate::game::zones::Permanent::new(token, state.turn);
-        perm.is_copy_of = Some(creature_name.clone());
+        perm.is_copy_of = Some(crate::game::cards::intern_card_name(&creature_name));
 
         // Count Terrors BEFORE adding the token - Terror of the Peaks triggers on "another creature"
         // so the token cannot trigger from itself entering
