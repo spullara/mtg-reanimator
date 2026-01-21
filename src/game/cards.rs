@@ -1147,11 +1147,12 @@ pub fn resolve_town_greeter_etb(state: &mut GameState, verbose: bool) {
 ///
 /// EXACT LOGIC FROM TYPESCRIPT:
 /// - Draw 2 cards first
-/// - Then discard 2 cards with 4-priority system:
+/// - Then discard 2 cards with 5-priority system:
 ///   1. Bringer of the Last Gift
 ///   2. Terror of the Peaks
-///   3. Excess lands (only if > 2 lands in hand)
-///   4. Last card in hand
+///   3. Ardyn, the Usurper (8 mana - want to reanimate, not cast)
+///   4. Excess lands (only if > 2 lands in hand)
+///   5. Last card in hand
 /// - Each discard iteration searches for the best card independently
 pub fn resolve_kiora_etb(state: &mut GameState, verbose: bool) {
     // Draw 2, discard 2
@@ -1194,7 +1195,14 @@ pub fn resolve_kiora_etb(state: &mut GameState, verbose: bool) {
                 .position(|c| c.name() == "Terror of the Peaks");
         }
 
-        // Priority 3: Excess lands (only if > 2 lands in hand)
+        // Priority 3: Ardyn, the Usurper (8 mana - want to reanimate, not cast)
+        if to_discard_idx.is_none() {
+            to_discard_idx = state.hand.cards()
+                .iter()
+                .position(|c| c.name() == "Ardyn, the Usurper");
+        }
+
+        // Priority 4: Excess lands (only if > 2 lands in hand)
         if to_discard_idx.is_none() {
             let lands: Vec<usize> = state.hand.cards()
                 .iter()
@@ -1208,7 +1216,7 @@ pub fn resolve_kiora_etb(state: &mut GameState, verbose: bool) {
             }
         }
 
-        // Priority 4: Last card in hand
+        // Priority 5: Last card in hand
         if to_discard_idx.is_none() {
             to_discard_idx = Some(state.hand.size() - 1);
         }
