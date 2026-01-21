@@ -721,16 +721,8 @@ pub fn process_etb_triggers_verbose(
                         println!("    *** COMBO! Superior Spider-Man copies Bringer of the Last Gift! ***");
                     }
 
-                    // Get the power of the copied creature
-                    let copied_power = if let Card::Creature(c) = &state.graveyard.cards()[idx] {
-                        Some(c.power)
-                    } else {
-                        None
-                    };
-
-                    // Copy Bringer!
+                    // Copy Bringer! (Spider-Man stays 4/4 but gains Bringer's types and triggers ETB)
                     permanent.is_copy_of = Some("Bringer of the Last Gift".to_string());
-                    permanent.copied_power = copied_power;
 
                     // Exile the copied card
                     if let Some(bringer) = state.graveyard.remove_card(idx) {
@@ -757,16 +749,8 @@ pub fn process_etb_triggers_verbose(
                         println!("    *** Spider-Man copies Ardyn, the Usurper! ({} creatures for Starscourge) ***", other_creatures_count);
                     }
 
-                    // Get the power of the copied creature
-                    let copied_power = if let Card::Creature(c) = &state.graveyard.cards()[idx] {
-                        Some(c.power)
-                    } else {
-                        None
-                    };
-
-                    // Copy Ardyn
+                    // Copy Ardyn (Spider-Man stays 4/4 but gains Demon type for haste and triggers Starscourge)
                     permanent.is_copy_of = Some("Ardyn, the Usurper".to_string());
-                    permanent.copied_power = copied_power;
 
                     // Exile Ardyn from graveyard
                     if let Some(ardyn) = state.graveyard.remove_card(idx) {
@@ -796,19 +780,12 @@ pub fn process_etb_triggers_verbose(
 
                     if let Some(idx) = mill_creature {
                         let creature_name = state.graveyard.cards()[idx].name().to_string();
-                        // Get the power of the copied creature
-                        let copied_power = if let Card::Creature(c) = &state.graveyard.cards()[idx] {
-                            Some(c.power)
-                        } else {
-                            None
-                        };
                         if verbose {
                             println!("    Spider-Man copies {} to dig for Bringer (have another Spider-Man in hand)", creature_name);
                         }
 
-                        // Copy the mill creature
+                        // Copy the mill creature (Spider-Man stays 4/4 but triggers the copied creature's ETB)
                         permanent.is_copy_of = Some(creature_name.clone());
-                        permanent.copied_power = copied_power;
 
                         // Exile the copied card
                         if let Some(creature) = state.graveyard.remove_card(idx) {

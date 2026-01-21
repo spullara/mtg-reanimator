@@ -215,9 +215,9 @@ pub fn simulate_combat(state: &mut GameState, verbose: bool) -> u32 {
         if let Some(permanent) = state.battlefield.permanents_mut().get_mut(*idx) {
             permanent.tapped = true;
 
-            // Get creature power (use copied power if this is a copy)
+            // Get creature power (use the base creature's power - copies like Spider-Man keep their own P/T)
             if let Card::Creature(creature) = &permanent.card {
-                let power = permanent.copied_power.unwrap_or(creature.power);
+                let power = creature.power;
                 total_damage += power;
 
                 // Track lifelink damage for Demons when Ardyn is present

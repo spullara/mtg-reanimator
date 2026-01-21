@@ -16,8 +16,7 @@ pub struct Permanent {
     pub counters: HashMap<CounterType, u32>,
     pub chosen_type: Option<String>,      // For Cavern of Souls
     pub chosen_basic_type: Option<String>, // For Multiversal Passage
-    pub is_copy_of: Option<String>,       // For Superior Spider-Man
-    pub copied_power: Option<u32>,        // Power of the copied creature (for combat damage)
+    pub is_copy_of: Option<String>,       // For Superior Spider-Man (tracks copied creature for types/triggers, but Spider-Man stays 4/4)
 }
 
 impl Permanent {
@@ -30,7 +29,6 @@ impl Permanent {
             chosen_type: None,
             chosen_basic_type: None,
             is_copy_of: None,
-            copied_power: None,
         }
     }
 
