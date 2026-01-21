@@ -320,16 +320,26 @@ fn get_mana_cost(card: &Card) -> &crate::card::ManaCost {
 /// Core game logic that determines what spells to cast and in what order
 pub fn main_phase(state: &mut GameState, db: &CardDatabase, verbose: bool, rng: &mut crate::rng::GameRng) {
     // SPECIAL CASE: Turn 4 combo check
-    // If we have Spider-Man in hand, Bringer in GY, and can get to 4 mana by playing a land,
+    // If we have Spider-Man in hand, and a valid combo target in GY, and can get to 4 mana by playing a land,
     // play the land FIRST before casting any other spells!
     let has_spider_man = state.hand.cards().iter().any(|c| c.name() == "Superior Spider-Man");
     let has_bringer_in_gy = state.graveyard.cards().iter().any(|c| c.name() == "Bringer of the Last Gift");
+
+    // Also check for Ardyn combo path: Ardyn in GY + other creatures for Starscourge
+    let has_ardyn_in_gy = state.graveyard.cards().iter().any(|c| c.name() == "Ardyn, the Usurper");
+    let other_creatures_in_gy = state.graveyard.cards().iter()
+        .filter(|c| matches!(c, Card::Creature(_)) && c.name() != "Ardyn, the Usurper")
+        .count();
+    let has_ardyn_combo = has_ardyn_in_gy && other_creatures_in_gy >= 1;
+
+    let has_valid_combo_target = has_bringer_in_gy || has_ardyn_combo;
+
     let current_mana = state.battlefield.permanents()
         .iter()
         .filter(|p| matches!(p.card, Card::Land(_)) && !p.tapped)
         .count() as u32;
 
-    if has_spider_man && has_bringer_in_gy && current_mana == 3 && !state.land_played_this_turn {
+    if has_spider_man && has_valid_combo_target && current_mana == 3 && !state.land_played_this_turn {
         // Check if we have an untapped land to play
         let hand_cards = state.hand.cards().to_vec();
         if let Some(untapped_land_idx) = hand_cards.iter().position(|c| {
@@ -674,8 +684,9 @@ pub fn main_phase(state: &mut GameState, db: &CardDatabase, verbose: bool, rng: 
 
                 // Spider-Man casting logic:
                 // 1. If Bringer in graveyard and combo is lethal -> cast (THE COMBO!)
-                // 2. If no Bringer in graveyard but have 2+ Spider-Man in hand AND
-                //    a mill creature in graveyard -> cast to dig for Bringer
+                // 2. If Ardyn in graveyard with other creatures -> cast (ARDYN COMBO!)
+                // 3. If no combo available but have 2+ Spider-Man in hand AND
+                //    a mill creature in graveyard -> cast to dig for combo pieces
                 if c.name() == "Superior Spider-Man" {
                     if has_bringer_in_graveyard {
                         // Only cast if combo would be lethal
@@ -683,20 +694,35 @@ pub fn main_phase(state: &mut GameState, db: &CardDatabase, verbose: bool, rng: 
                             return false; // Wait until it would kill
                         }
                     } else {
-                        // No Bringer in graveyard - check if we should dig
-                        let spider_man_count = state.hand.cards().iter()
-                            .filter(|card| card.name() == "Superior Spider-Man")
-                            .count();
-                        let has_mill_creature_in_gy = state.graveyard.cards().iter()
-                            .any(|card| matches!(card.name(),
-                                "Overlord of the Balemurk" |
-                                "Kiora, the Rising Tide" |
-                                "Town Greeter"));
+                        // No Bringer in graveyard - check for Ardyn combo path
+                        let has_ardyn_in_gy = state.graveyard.cards().iter()
+                            .any(|card| card.name() == "Ardyn, the Usurper");
 
-                        if spider_man_count < 2 || !has_mill_creature_in_gy {
-                            return false; // Can't dig effectively
+                        // Count creatures in GY that aren't Ardyn (for Starscourge targets)
+                        let other_creatures_in_gy = state.graveyard.cards().iter()
+                            .filter(|card| matches!(card, Card::Creature(_)) && card.name() != "Ardyn, the Usurper")
+                            .count();
+
+                        // Allow casting Spider-Man if Ardyn is in GY with targets for Starscourge
+                        if has_ardyn_in_gy && other_creatures_in_gy >= 1 {
+                            // Allow casting to reanimate Ardyn - Starscourge creates 5/5 Demons with haste
+                            // This path is valid even if not immediately lethal
+                        } else {
+                            // No Ardyn combo - check if we should dig
+                            let spider_man_count = state.hand.cards().iter()
+                                .filter(|card| card.name() == "Superior Spider-Man")
+                                .count();
+                            let has_mill_creature_in_gy = state.graveyard.cards().iter()
+                                .any(|card| matches!(card.name(),
+                                    "Overlord of the Balemurk" |
+                                    "Kiora, the Rising Tide" |
+                                    "Town Greeter"));
+
+                            if spider_man_count < 2 || !has_mill_creature_in_gy {
+                                return false; // Can't dig effectively
+                            }
+                            // Otherwise, allow casting to dig for combo pieces
                         }
-                        // Otherwise, allow casting to dig for Bringer
                     }
                 }
 

@@ -709,7 +709,8 @@ pub fn process_etb_triggers_verbose(
             "mind_swap_copy" => {
                 // Superior Spider-Man: copy creature from graveyard
                 // Priority 1: Copy Bringer if in graveyard (THE COMBO!)
-                // Priority 2: If no Bringer but have another Spider-Man in hand,
+                // Priority 2: Copy Ardyn if in graveyard AND there are other creatures
+                // Priority 3: If no Bringer/Ardyn but have another Spider-Man in hand,
                 //             copy a mill creature to dig for Bringer
 
                 let bringer_idx = state.graveyard.cards().iter()
@@ -730,58 +731,88 @@ pub fn process_etb_triggers_verbose(
 
                     // Now trigger Bringer's ETB (mass reanimate!)
                     resolve_bringer_etb(state, verbose);
-                } else {
-                    // No Bringer in graveyard - check if we have another Spider-Man in hand
-                    let spider_man_in_hand = state.hand.cards().iter()
-                        .filter(|c| c.name() == "Superior Spider-Man")
-                        .count();
+                    return Ok(());
+                }
 
-                    if spider_man_in_hand >= 1 {
-                        // We have another Spider-Man - copy a mill creature to dig for Bringer
-                        // Priority: Overlord of the Balemurk > Kiora > Town Greeter
-                        let mill_creature = state.graveyard.cards().iter()
-                            .position(|c| c.name() == "Overlord of the Balemurk")
-                            .or_else(|| state.graveyard.cards().iter()
-                                .position(|c| c.name() == "Kiora, the Rising Tide"))
-                            .or_else(|| state.graveyard.cards().iter()
-                                .position(|c| c.name() == "Town Greeter"));
+                // Priority 2: Copy Ardyn if in graveyard AND there are other creatures
+                // (Ardyn's Starscourge will create 5/5 Demon tokens from those creatures)
+                let ardyn_idx = state.graveyard.cards().iter()
+                    .position(|c| c.name() == "Ardyn, the Usurper");
 
-                        if let Some(idx) = mill_creature {
-                            let creature_name = state.graveyard.cards()[idx].name().to_string();
-                            if verbose {
-                                println!("    Spider-Man copies {} to dig for Bringer (have another Spider-Man in hand)", creature_name);
+                let other_creatures_count = state.graveyard.cards().iter()
+                    .filter(|c| matches!(c, Card::Creature(_)) && c.name() != "Ardyn, the Usurper")
+                    .count();
+
+                if ardyn_idx.is_some() && other_creatures_count >= 1 {
+                    let idx = ardyn_idx.unwrap();
+                    if verbose {
+                        println!("    *** Spider-Man copies Ardyn, the Usurper! ({} creatures for Starscourge) ***", other_creatures_count);
+                    }
+
+                    // Copy Ardyn
+                    permanent.is_copy_of = Some("Ardyn, the Usurper".to_string());
+
+                    // Exile Ardyn from graveyard
+                    if let Some(ardyn) = state.graveyard.remove_card(idx) {
+                        state.exile.add_card(ardyn);
+                    }
+
+                    // Note: Ardyn's Starscourge triggers at beginning of combat,
+                    // not on ETB, so no trigger to resolve here
+                    return Ok(());
+                }
+
+                // Priority 3: If no Bringer/Ardyn but have another Spider-Man in hand,
+                // copy a mill creature to dig for Bringer
+                let spider_man_in_hand = state.hand.cards().iter()
+                    .filter(|c| c.name() == "Superior Spider-Man")
+                    .count();
+
+                if spider_man_in_hand >= 1 {
+                    // We have another Spider-Man - copy a mill creature to dig for Bringer
+                    // Priority: Overlord of the Balemurk > Kiora > Town Greeter
+                    let mill_creature = state.graveyard.cards().iter()
+                        .position(|c| c.name() == "Overlord of the Balemurk")
+                        .or_else(|| state.graveyard.cards().iter()
+                            .position(|c| c.name() == "Kiora, the Rising Tide"))
+                        .or_else(|| state.graveyard.cards().iter()
+                            .position(|c| c.name() == "Town Greeter"));
+
+                    if let Some(idx) = mill_creature {
+                        let creature_name = state.graveyard.cards()[idx].name().to_string();
+                        if verbose {
+                            println!("    Spider-Man copies {} to dig for Bringer (have another Spider-Man in hand)", creature_name);
+                        }
+
+                        // Copy the mill creature
+                        permanent.is_copy_of = Some(creature_name.clone());
+
+                        // Exile the copied card
+                        if let Some(creature) = state.graveyard.remove_card(idx) {
+                            state.exile.add_card(creature);
+                        }
+
+                        // Trigger the copied creature's ETB
+                        match creature_name.as_str() {
+                            "Overlord of the Balemurk" => {
+                                // Mill 4, return a permanent
+                                resolve_overlord_etb(state, verbose);
                             }
-
-                            // Copy the mill creature
-                            permanent.is_copy_of = Some(creature_name.clone());
-
-                            // Exile the copied card
-                            if let Some(creature) = state.graveyard.remove_card(idx) {
-                                state.exile.add_card(creature);
+                            "Kiora, the Rising Tide" => {
+                                // Draw 2, discard 2
+                                resolve_kiora_etb(state, verbose);
                             }
-
-                            // Trigger the copied creature's ETB
-                            match creature_name.as_str() {
-                                "Overlord of the Balemurk" => {
-                                    // Mill 4, return a permanent
-                                    resolve_overlord_etb(state, verbose);
-                                }
-                                "Kiora, the Rising Tide" => {
-                                    // Draw 2, discard 2
-                                    resolve_kiora_etb(state, verbose);
-                                }
-                                "Town Greeter" => {
-                                    // Mill 4, return a land
-                                    resolve_town_greeter_etb(state, verbose);
-                                }
-                                _ => {}
+                            "Town Greeter" => {
+                                // Mill 4, return a land
+                                resolve_town_greeter_etb(state, verbose);
                             }
-                        } else if verbose {
-                            println!("    Spider-Man enters as a 4/4 (no good copy target, but have another Spider-Man)");
+                            _ => {}
                         }
                     } else if verbose {
-                        println!("    Spider-Man enters as a 4/4 (no good copy target)");
+                        println!("    Spider-Man enters as a 4/4 (no good copy target, but have another Spider-Man)");
                     }
+                } else if verbose {
+                    println!("    Spider-Man enters as a 4/4 (no good copy target)");
                 }
             }
             _ => {} // Other abilities handled elsewhere
@@ -1251,6 +1282,7 @@ pub fn resolve_formidable_speaker_etb(state: &mut GameState, rng: &mut crate::rn
     let has_spider_man = state.hand.cards().iter().any(|c| c.name() == "Superior Spider-Man");
     let has_bringer_in_hand = state.hand.cards().iter().any(|c| c.name() == "Bringer of the Last Gift");
     let has_terror_in_hand = state.hand.cards().iter().any(|c| c.name() == "Terror of the Peaks");
+    let has_ardyn_in_hand = state.hand.cards().iter().any(|c| c.name() == "Ardyn, the Usurper");
     let has_bringer_in_gy = state.graveyard.cards().iter().any(|c| c.name() == "Bringer of the Last Gift");
     let has_terror_in_gy = state.graveyard.cards().iter().any(|c| c.name() == "Terror of the Peaks");
 
@@ -1258,13 +1290,16 @@ pub fn resolve_formidable_speaker_etb(state: &mut GameState, rng: &mut crate::rn
     let mut discard_target: Option<String> = None;
     let mut tutor_target: Option<String> = None;
 
-    // Priority 1: Discard Bringer/Terror to get Spider-Man
+    // Priority 1: Discard Bringer/Terror/Ardyn to get Spider-Man
     if !has_spider_man {
         if has_bringer_in_hand {
             discard_target = Some("Bringer of the Last Gift".to_string());
             tutor_target = Some("Superior Spider-Man".to_string());
         } else if has_terror_in_hand {
             discard_target = Some("Terror of the Peaks".to_string());
+            tutor_target = Some("Superior Spider-Man".to_string());
+        } else if has_ardyn_in_hand {
+            discard_target = Some("Ardyn, the Usurper".to_string());
             tutor_target = Some("Superior Spider-Man".to_string());
         }
     }
@@ -1309,20 +1344,35 @@ pub fn resolve_formidable_speaker_etb(state: &mut GameState, rng: &mut crate::rn
     }
 
     // Priority 4: If we have Spider-Man, and Terror in GY but no Bringer in GY or hand
-    // We need to get Bringer somehow - either tutor it, or tutor a mill creature
+    // We need to get Bringer somehow - BUT only if Bringer is in the library!
+    // Also skip if we have the Ardyn combo available
     if tutor_target.is_none() && has_spider_man && has_terror_in_gy && !has_bringer_in_gy && !has_bringer_in_hand {
-        // Find something to discard (prefer excess lands)
-        let lands_in_hand: Vec<usize> = state.hand.cards().iter()
-            .enumerate()
-            .filter(|(_, c)| matches!(c, Card::Land(_)))
-            .map(|(i, _)| i)
-            .collect();
+        // Check if Ardyn combo is available (skip Priority 4 if so - Ardyn is a valid path)
+        let has_ardyn_in_gy = state.graveyard.cards().iter().any(|c| c.name() == "Ardyn, the Usurper");
+        let other_creatures_count = state.graveyard.cards().iter()
+            .filter(|c| matches!(c, Card::Creature(_)) && c.name() != "Ardyn, the Usurper")
+            .count();
 
-        // Only discard if we have 2+ lands (keep at least 1 for land drop)
-        if lands_in_hand.len() >= 2 {
-            discard_target = Some("land".to_string());
-            // Tutor for Bringer if possible, otherwise Overlord/Kiora for milling
-            tutor_target = Some("Bringer of the Last Gift".to_string());
+        // Only try to tutor Bringer if we don't have Ardyn combo available
+        if !(has_ardyn_in_gy && other_creatures_count >= 1) {
+            // Check if Bringer is actually in the library
+            let bringer_in_library = state.library.cards().iter()
+                .any(|c| c.name() == "Bringer of the Last Gift");
+
+            if bringer_in_library {
+                // Find something to discard (prefer excess lands)
+                let lands_in_hand: Vec<usize> = state.hand.cards().iter()
+                    .enumerate()
+                    .filter(|(_, c)| matches!(c, Card::Land(_)))
+                    .map(|(i, _)| i)
+                    .collect();
+
+                // Only discard if we have 2+ lands (keep at least 1 for land drop)
+                if lands_in_hand.len() >= 2 {
+                    discard_target = Some("land".to_string());
+                    tutor_target = Some("Bringer of the Last Gift".to_string());
+                }
+            }
         }
     }
 
@@ -1348,6 +1398,56 @@ pub fn resolve_formidable_speaker_etb(state: &mut GameState, rng: &mut crate::rn
             } else if !has_kiora {
                 discard_target = Some("land".to_string());
                 tutor_target = Some("Kiora, the Rising Tide".to_string());
+            }
+        }
+    }
+
+    // Priority 6: If we have Spider-Man and Ardyn in graveyard (but no Bringer),
+    // and there are creatures for Starscourge - this is a valid combo!
+    // Tutor for Terror if we need it, otherwise get more creatures
+    if tutor_target.is_none() && has_spider_man && !has_bringer_in_gy {
+        let has_ardyn_in_gy = state.graveyard.cards().iter().any(|c| c.name() == "Ardyn, the Usurper");
+        let other_creatures_count = state.graveyard.cards().iter()
+            .filter(|c| matches!(c, Card::Creature(_)) && c.name() != "Ardyn, the Usurper")
+            .count();
+
+        // Valid Ardyn combo: Ardyn + at least 1 other creature for Starscourge
+        if has_ardyn_in_gy && other_creatures_count >= 1 {
+            // Find something to discard (prefer excess lands)
+            let lands_in_hand: Vec<usize> = state.hand.cards().iter()
+                .enumerate()
+                .filter(|(_, c)| matches!(c, Card::Land(_)))
+                .map(|(i, _)| i)
+                .collect();
+
+            if lands_in_hand.len() >= 2 {
+                // If no Terror in GY, tutor for it
+                if !has_terror_in_gy && !has_terror_in_hand {
+                    discard_target = Some("land".to_string());
+                    tutor_target = Some("Terror of the Peaks".to_string());
+                } else {
+                    // Already have Terror, tutor for more creatures to add damage
+                    let has_overlord = state.hand.cards().iter().any(|c| c.name() == "Overlord of the Balemurk")
+                        || state.graveyard.cards().iter().any(|c| c.name() == "Overlord of the Balemurk");
+                    let has_kiora = state.hand.cards().iter().any(|c| c.name() == "Kiora, the Rising Tide")
+                        || state.graveyard.cards().iter().any(|c| c.name() == "Kiora, the Rising Tide");
+                    let spider_count = state.hand.cards().iter()
+                        .filter(|c| c.name() == "Superior Spider-Man")
+                        .count();
+
+                    if !has_overlord {
+                        discard_target = Some("land".to_string());
+                        tutor_target = Some("Overlord of the Balemurk".to_string());
+                    } else if !has_kiora {
+                        discard_target = Some("land".to_string());
+                        tutor_target = Some("Kiora, the Rising Tide".to_string());
+                    } else if spider_count < 2 {
+                        // Backup Spider-Man for redundancy
+                        discard_target = Some("land".to_string());
+                        tutor_target = Some("Superior Spider-Man".to_string());
+                    }
+                    // If we have everything, don't waste the ability
+                }
             }
         }
     }
