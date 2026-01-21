@@ -526,7 +526,7 @@ pub fn process_etb_triggers_verbose(
     permanent: &mut Permanent,
     _db: &CardDatabase,
     verbose: bool,
-    _rng: &mut crate::rng::GameRng,
+    rng: &mut crate::rng::GameRng,
 ) -> Result<(), String> {
     // Extract abilities before borrowing permanent mutably
     let abilities = match &permanent.card {
@@ -596,6 +596,10 @@ pub fn process_etb_triggers_verbose(
             "etb_draw_2_discard_2" => {
                 // Kiora: draw 2, discard 2 - use the proper priority logic
                 resolve_kiora_etb(state, verbose);
+            }
+            "etb_discard_tutor_creature" => {
+                // Formidable Speaker: may discard a card to tutor a creature
+                resolve_formidable_speaker_etb(state, rng, verbose);
             }
             "impending_5" => {
                 // Impending counters are already added by cast_creature when use_impending=true
@@ -1214,6 +1218,120 @@ pub fn resolve_kiora_etb(state: &mut GameState, verbose: bool) {
 
     if verbose {
         println!("    Kiora ETB: discarded {}", discarded.join(", "));
+    }
+}
+
+/// Resolve Formidable Speaker's ETB ability
+///
+/// May discard a card to search library for a creature card and put it into hand.
+/// Decision logic:
+/// - Only use if we have something good to discard (Bringer/Terror) AND need Spider-Man
+/// - Or discard a land to find a combo piece
+pub fn resolve_formidable_speaker_etb(state: &mut GameState, rng: &mut crate::rng::GameRng, verbose: bool) {
+    // Check if we want to use the ability
+    // We want to discard if:
+    // 1. We have Bringer or Terror in hand (want them in graveyard) AND don't have Spider-Man
+    // 2. We have Spider-Man but no Bringer in graveyard (can discard Bringer to tutor Spider-Man)
+
+    let has_spider_man = state.hand.cards().iter().any(|c| c.name() == "Superior Spider-Man");
+    let has_bringer_in_hand = state.hand.cards().iter().any(|c| c.name() == "Bringer of the Last Gift");
+    let has_terror_in_hand = state.hand.cards().iter().any(|c| c.name() == "Terror of the Peaks");
+    let has_bringer_in_gy = state.graveyard.cards().iter().any(|c| c.name() == "Bringer of the Last Gift");
+    let has_terror_in_gy = state.graveyard.cards().iter().any(|c| c.name() == "Terror of the Peaks");
+
+    // Determine what to discard and what to tutor
+    let mut discard_target: Option<String> = None;
+    let mut tutor_target: Option<String> = None;
+
+    // Priority 1: Discard Bringer/Terror to get Spider-Man
+    if !has_spider_man {
+        if has_bringer_in_hand {
+            discard_target = Some("Bringer of the Last Gift".to_string());
+            tutor_target = Some("Superior Spider-Man".to_string());
+        } else if has_terror_in_hand {
+            discard_target = Some("Terror of the Peaks".to_string());
+            tutor_target = Some("Superior Spider-Man".to_string());
+        }
+    }
+
+    // Priority 2: If we have Spider-Man but no Bringer in graveyard, discard Bringer
+    if tutor_target.is_none() && has_spider_man && !has_bringer_in_gy && has_bringer_in_hand {
+        discard_target = Some("Bringer of the Last Gift".to_string());
+        // Tutor for Terror if we don't have it in graveyard, otherwise tutor for mill creature
+        if !has_terror_in_gy && !has_terror_in_hand {
+            tutor_target = Some("Terror of the Peaks".to_string());
+        } else {
+            // Terror is already in graveyard, tutor for mill creature to add damage
+            // Priority: Overlord > Kiora > second Spider-Man
+            let has_overlord_in_hand = state.hand.cards().iter().any(|c| c.name() == "Overlord of the Balemurk");
+            let has_kiora_in_hand = state.hand.cards().iter().any(|c| c.name() == "Kiora, the Rising Tide");
+            
+            if !has_overlord_in_hand {
+                tutor_target = Some("Overlord of the Balemurk".to_string());
+            } else if !has_kiora_in_hand {
+                tutor_target = Some("Kiora, the Rising Tide".to_string());
+            } else {
+                // Already have mill creatures, tutor for backup Spider-Man if < 2 in hand
+                let spider_count = state.hand.cards().iter().filter(|c| c.name() == "Superior Spider-Man").count();
+                if spider_count < 2 {
+                    tutor_target = Some("Superior Spider-Man".to_string());
+                }
+            }
+        }
+    }
+
+
+    // Priority 3: If we have Spider-Man and Bringer in graveyard, but no Terror
+    if tutor_target.is_none() && has_spider_man && has_bringer_in_gy && !has_terror_in_gy && !has_terror_in_hand {
+        // Find something to discard (prefer lands or duplicates)
+        let land_idx = state.hand.cards().iter()
+            .position(|c| matches!(c, Card::Land(_)));
+        if land_idx.is_some() {
+            // Just find any discard target, we want Terror
+            discard_target = Some("land".to_string());
+            tutor_target = Some("Terror of the Peaks".to_string());
+        }
+    }
+
+    // Execute the ability if we have targets
+    if let (Some(discard), Some(tutor)) = (&discard_target, &tutor_target) {
+        // Find and discard the card
+        let discard_idx = if discard == "land" {
+            state.hand.cards().iter()
+                .position(|c| matches!(c, Card::Land(_)))
+        } else {
+            state.hand.cards().iter()
+                .position(|c| c.name() == discard)
+        };
+
+        if let Some(idx) = discard_idx {
+            if let Some(card) = state.hand.remove_card(idx) {
+                let discarded_name = card.name().to_string();
+                state.graveyard.add_card(card);
+
+                // Search library for the tutor target
+                let tutor_idx = state.library.cards().iter()
+                    .position(|c| c.name() == tutor);
+
+                if let Some(lib_idx) = tutor_idx {
+                    // Remove card from library using cards_mut
+                    let tutored = state.library.cards_mut().remove(lib_idx);
+                    let tutored_name = tutored.name().to_string();
+                    state.hand.add_card(tutored);
+                    state.library.shuffle(rng);
+
+                    if verbose {
+                        println!("    Formidable Speaker ETB: discarded {}, tutored {}",
+                            discarded_name, tutored_name);
+                    }
+                } else if verbose {
+                    println!("    Formidable Speaker ETB: discarded {}, but {} not found in library",
+                        discarded_name, tutor);
+                }
+            }
+        }
+    } else if verbose {
+        println!("    Formidable Speaker ETB: chose not to discard");
     }
 }
 

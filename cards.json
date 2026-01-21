@@ -161,6 +161,16 @@
     "abilities": ["etb_mill_4_return_land"]
   },
   {
+    "name": "Formidable Speaker",
+    "card_type": "creature",
+    "mana_cost": {"green": 1, "generic": 2},
+    "mana_value": 3,
+    "power": 2,
+    "toughness": 4,
+    "creature_types": ["Elf", "Druid"],
+    "abilities": ["etb_discard_tutor_creature"]
+  },
+  {
     "name": "Superior Spider-Man",
     "card_type": "creature",
     "mana_cost": {"blue": 1, "black": 1, "generic": 2},

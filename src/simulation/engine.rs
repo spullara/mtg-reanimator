@@ -207,12 +207,13 @@ pub fn main_phase(state: &mut GameState, db: &CardDatabase, verbose: bool, rng: 
 
     // STEP 1: If we haven't played a land yet and have land-finding spells,
     // cast those FIRST to potentially find a better land
-    // BUT: If we have Bringer/Terror in hand and can cast Kiora, skip this step!
-    // Kiora is more important (discards Bringer to graveyard for the combo)
+    // BUT: If we have Bringer/Terror in hand and can cast Kiora or Formidable Speaker, skip this step!
+    // These are more important (discard Bringer to graveyard for the combo)
     let has_bringer_or_terror_in_hand = state.hand.cards().iter().any(|c| {
         c.name() == "Bringer of the Last Gift" || c.name() == "Terror of the Peaks"
     });
     let kiora_in_hand = state.hand.cards().iter().find(|c| c.name() == "Kiora, the Rising Tide");
+    let formidable_speaker_in_hand = state.hand.cards().iter().find(|c| c.name() == "Formidable Speaker");
 
     // Check if we can cast Kiora now OR if we could cast it after playing an untapped land
     let could_cast_kiora_after_land_drop = || -> bool {
@@ -299,8 +300,8 @@ pub fn main_phase(state: &mut GameState, db: &CardDatabase, verbose: bool, rng: 
         has_untapped_land_with_u
     };
 
-    let should_prioritize_kiora = has_bringer_or_terror_in_hand
-        && kiora_in_hand.is_some()
+    let should_prioritize_discard_spell = has_bringer_or_terror_in_hand
+        && (kiora_in_hand.is_some() || formidable_speaker_in_hand.is_some())
         && could_cast_kiora_after_land_drop();
 
     // SPECIAL CASE: Analyze the Pollen early casting
@@ -385,7 +386,7 @@ pub fn main_phase(state: &mut GameState, db: &CardDatabase, verbose: bool, rng: 
         }
     }
 
-    if !state.land_played_this_turn && !should_prioritize_kiora {
+    if !state.land_played_this_turn && !should_prioritize_discard_spell {
         let mut cast_any = true;
 
         while cast_any && !state.land_played_this_turn {
@@ -577,17 +578,17 @@ pub fn main_phase(state: &mut GameState, db: &CardDatabase, verbose: bool, rng: 
                 }
             }
 
-            // Priority 2: Kiora if Bringer/Terror in hand
-            if has_bringer_in_hand {
-                if a_card.name() == "Kiora, the Rising Tide" {
+            // Priority 2: Kiora or Formidable Speaker if Bringer/Terror in hand
+            // (These can discard combo pieces to the graveyard)
+            if has_bringer_in_hand || has_terror_in_hand {
+                // Prefer Formidable Speaker slightly (cheaper at 3 mana vs Kiora's 3)
+                // and it tutors for Spider-Man
+                if a_card.name() == "Formidable Speaker" {
                     return std::cmp::Ordering::Less;
                 }
-                if b_card.name() == "Kiora, the Rising Tide" {
+                if b_card.name() == "Formidable Speaker" {
                     return std::cmp::Ordering::Greater;
                 }
-            }
-
-            if has_terror_in_hand {
                 if a_card.name() == "Kiora, the Rising Tide" {
                     return std::cmp::Ordering::Less;
                 }
