@@ -1,0 +1,47 @@
+# MTG Reanimator Deck
+# Generated: 2026-01-21 13:03:57
+# Hash: f8ef55b8
+#
+# Optimization Results
+# Strategy: weighted
+# Simulations: 10000
+# Win rate: 100.0%
+# Average win turn: 6.828
+#
+# Turn Distribution
+# Turn 4: 107 (1.1%)
+# Turn 5: 993 (9.9%)
+# Turn 6: 3593 (35.9%)
+# Turn 7: 2769 (27.7%)
+# Turn 8: 1477 (14.8%)
+# Turn 9: 675 (6.8%)
+# Turn 10: 252 (2.5%)
+# Turn 11: 91 (0.9%)
+# Turn 12: 31 (0.3%)
+# Turn 13: 8 (0.1%)
+# Turn 14: 2 (0.0%)
+# Turn 15: 1 (0.0%)
+# Turn 16: 1 (0.0%)
+
+# Fixed cards (36)
+2 Ardyn, the Usurper
+4 Awaken the Honored Dead
+4 Bringer of the Last Gift
+4 Cache Grab
+4 Dredger's Insight
+2 Formidable Speaker
+4 Kiora, the Rising Tide
+4 Superior Spider-Man
+4 Terror of the Peaks
+4 Town Greeter
+
+# Lands (24)
+4 Cavern of Souls
+4 Multiversal Passage
+4 Starting Town
+3 Underground Mortuary
+3 Watery Grave
+2 Forest
+2 Island
+1 Restless Cottage
+1 Wastewood Verge
