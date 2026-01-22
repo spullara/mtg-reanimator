@@ -4,6 +4,7 @@ import com.mtg.reanimator.card.Card;
 import com.mtg.reanimator.card.CardDatabase;
 import com.mtg.reanimator.card.CardDatabaseException;
 import com.mtg.reanimator.simulation.Deck;
+import com.mtg.reanimator.simulation.GameAnalyzer;
 import com.mtg.reanimator.simulation.GameResult;
 import com.mtg.reanimator.simulation.LandOptimizer;
 import com.mtg.reanimator.simulation.SimulationEngine;
@@ -46,25 +47,17 @@ public class Main implements Runnable {
     // ========== RUN COMMAND ==========
     @Command(name = "run", description = "Run simulations")
     static class RunCommand implements Callable<Integer> {
-        @Option(names = {"-n", "--count"}, defaultValue = "10000",
-                description = "Number of simulations")
-        int count;
+        @Option(names = {"-n", "--num-games"}, defaultValue = "1000",
+                description = "Number of games to simulate")
+        int numGames;
 
         @Option(names = {"-s", "--seed"},
                 description = "Random seed (optional)")
         Long seed;
 
-        @Option(names = {"-t", "--threads"}, defaultValue = "1",
-                description = "Number of threads")
-        int threads;
-
         @Option(names = {"-v", "--verbose"},
                 description = "Verbose output (single game trace)")
         boolean verbose;
-
-        @Option(names = {"--max-turns"}, defaultValue = "10",
-                description = "Maximum turns per game")
-        int maxTurns;
 
         @Option(names = {"-d", "--deck"}, defaultValue = "deck.txt",
                 description = "Path to deck file")
@@ -97,7 +90,7 @@ public class Main implements Runnable {
 
             System.out.println("\n=== MTG Reanimator Simulator ===\n");
             System.out.println("Deck: " + deckPath + " (" + deck.size() + " cards)");
-            System.out.println("Games: " + count);
+            System.out.println("Games: " + numGames);
             if (seed != null) {
                 System.out.println("Seed: " + seed);
             }
@@ -105,11 +98,11 @@ public class Main implements Runnable {
 
             // Run simulations
             long startTime = System.currentTimeMillis();
-            List<GameResult> results = runSimulations(deck.getCards(), db, count, seed, verbose);
+            List<GameResult> results = runSimulations(deck.getCards(), db, numGames, seed, verbose);
             long elapsed = System.currentTimeMillis() - startTime;
 
             // Calculate statistics
-            printResults(results, count, elapsed);
+            printResults(results, numGames, elapsed);
             return 0;
         }
     }
@@ -117,17 +110,15 @@ public class Main implements Runnable {
     // ========== COMPARE COMMAND ==========
     @Command(name = "compare", description = "Compare two deck configurations")
     static class CompareCommand implements Callable<Integer> {
-        @Option(names = {"--deck1"}, required = true,
-                description = "First deck file")
+        @Parameters(index = "0", description = "First deck file")
         String deck1Path;
 
-        @Option(names = {"--deck2"}, required = true,
-                description = "Second deck file")
+        @Parameters(index = "1", description = "Second deck file")
         String deck2Path;
 
-        @Option(names = {"-n", "--count"}, defaultValue = "10000",
-                description = "Number of simulations per deck")
-        int count;
+        @Option(names = {"-n", "--num-games"}, defaultValue = "1000",
+                description = "Number of games per deck")
+        int numGames;
 
         @Option(names = {"-c", "--cards"}, defaultValue = "cards.json",
                 description = "Path to cards database")
@@ -162,20 +153,20 @@ public class Main implements Runnable {
             System.out.println("\n=== MTG Deck Comparison ===\n");
             System.out.println("Deck 1: " + deck1Path);
             System.out.println("Deck 2: " + deck2Path);
-            System.out.println("Games per deck: " + count);
+            System.out.println("Games per deck: " + numGames);
             System.out.println();
 
             long startTime = System.currentTimeMillis();
 
             System.out.println("Running deck 1...");
-            List<GameResult> results1 = runSimulations(deck1.getCards(), db, count, null, false);
+            List<GameResult> results1 = runSimulations(deck1.getCards(), db, numGames, null, false);
 
             System.out.println("Running deck 2...");
-            List<GameResult> results2 = runSimulations(deck2.getCards(), db, count, null, false);
+            List<GameResult> results2 = runSimulations(deck2.getCards(), db, numGames, null, false);
 
             long elapsed = System.currentTimeMillis() - startTime;
 
-            printComparisonResults(deck1Path, deck2Path, results1, results2, count, elapsed);
+            printComparisonResults(deck1Path, deck2Path, results1, results2, numGames, elapsed);
             return 0;
         }
     }
@@ -191,7 +182,7 @@ public class Main implements Runnable {
                 description = "Number of games per configuration")
         int games;
 
-        @Option(names = {"--strategy"}, defaultValue = "weighted",
+        @Option(names = {"-s", "--strategy"}, defaultValue = "weighted",
                 description = "Strategy: weighted or shuffle")
         String strategy;
 
@@ -396,9 +387,9 @@ public class Main implements Runnable {
     // ========== ANALYZE COMMAND ==========
     @Command(name = "analyze", description = "Analyze Turn 4 failures")
     static class AnalyzeCommand implements Callable<Integer> {
-        @Option(names = {"-n", "--count"}, defaultValue = "10000",
-                description = "Number of simulations")
-        int count;
+        @Option(names = {"-n", "--num-games"}, defaultValue = "1000",
+                description = "Number of games to simulate")
+        int numGames;
 
         @Option(names = {"-s", "--seed"},
                 description = "Random seed (optional)")
@@ -414,15 +405,92 @@ public class Main implements Runnable {
 
         @Override
         public Integer call() throws Exception {
+            // Load card database
+            CardDatabase db;
+            try {
+                db = CardDatabase.fromFile(cardsPath);
+                System.err.println("✓ Loaded " + db.cardCount() + " cards from " + cardsPath);
+            } catch (CardDatabaseException e) {
+                System.err.println("✗ Failed to load cards: " + e.getMessage());
+                return 1;
+            }
+
+            // Load deck
+            Deck deck;
+            try {
+                deck = Deck.loadFromFile(deckPath, db);
+            } catch (Deck.DeckException e) {
+                System.err.println("✗ Failed to parse deck file '" + deckPath + "': " + e.getMessage());
+                return 1;
+            }
+
             System.out.println("\n=== Turn 4 Combo Failure Analysis ===\n");
-            System.out.println("Deck: " + deckPath);
-            System.out.println("Games: " + count);
+            System.out.println("Deck: " + deckPath + " (" + deck.size() + " cards)");
+            System.out.println("Games: " + numGames);
             if (seed != null) {
                 System.out.println("Seed: " + seed);
             }
             System.out.println();
-            System.out.println("Note: Turn 4 analysis not yet implemented in Java port.");
-            System.out.println("Use the Rust version for detailed failure analysis.");
+
+            long startTime = System.currentTimeMillis();
+
+            // Run games to turn 4 in parallel
+            List<GameAnalyzer.Turn4Analysis> analyses;
+            if (seed != null) {
+                // Sequential with fixed seed
+                analyses = new ArrayList<>();
+                for (int i = 0; i < numGames; i++) {
+                    analyses.add(GameAnalyzer.runGameToTurn4(deck.getCards(), seed + i, db));
+                }
+            } else {
+                // Parallel with random seeds
+                analyses = IntStream.range(0, numGames)
+                        .parallel()
+                        .mapToObj(i -> {
+                            long gameSeed = System.nanoTime() + i;
+                            return GameAnalyzer.runGameToTurn4(deck.getCards(), gameSeed, db);
+                        })
+                        .toList();
+            }
+
+            long elapsed = System.currentTimeMillis() - startTime;
+
+            // Aggregate results
+            GameAnalyzer.AnalysisResults results = GameAnalyzer.aggregateResults(analyses);
+
+            System.out.println("=== Results ===\n");
+
+            // Sort failures by count (descending)
+            List<Map.Entry<GameAnalyzer.FailureReason, Integer>> failures = new ArrayList<>(
+                    results.failureCounts().entrySet());
+            failures.sort((a, b) -> Integer.compare(b.getValue(), a.getValue()));
+
+            // Print ranked failure reasons
+            System.out.println("Failure Reasons (ranked by frequency):\n");
+            for (Map.Entry<GameAnalyzer.FailureReason, Integer> entry : failures) {
+                double pct = (double) entry.getValue() / numGames * 100.0;
+                String bar = "█".repeat((int) (pct / 2.0));
+                System.out.printf("  %-30s %5.1f%% %s (%d)%n",
+                        entry.getKey().getDescription(), pct, bar, entry.getValue());
+            }
+
+            System.out.println("\n--- Statistics ---\n");
+            System.out.printf("Average lands by turn 4: %.2f%n", results.avgLands());
+            System.out.println("Color availability:");
+            System.out.printf("  Blue:  %5.1f%%%n", results.blueAvailability());
+            System.out.printf("  Black: %5.1f%%%n", results.blackAvailability());
+            System.out.printf("  Green: %5.1f%%%n", results.greenAvailability());
+
+            // Calculate combo ready percentage
+            int comboReady = results.failureCounts()
+                    .getOrDefault(GameAnalyzer.FailureReason.COMBO_AVAILABLE, 0);
+            System.out.printf("%nTurn 4 combo ready: %.1f%% (%d/%d)%n",
+                    (double) comboReady / numGames * 100.0, comboReady, numGames);
+
+            double elapsedSec = elapsed / 1000.0;
+            double gamesPerSec = elapsedSec > 0 ? numGames / elapsedSec : 0;
+            System.out.printf("%nCompleted in %.2fs (%.0f games/sec)%n", elapsedSec, gamesPerSec);
+
             return 0;
         }
     }
