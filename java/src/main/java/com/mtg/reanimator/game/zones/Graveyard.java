@@ -81,28 +81,41 @@ public class Graveyard {
      * Count the number of creature cards in the graveyard.
      */
     public int countCreatures() {
-        return (int) cards.stream()
-                .filter(c -> c.getCardType() == CardType.CREATURE)
-                .count();
+        int count = 0;
+        for (int i = 0; i < cards.size(); i++) {
+            if (cards.get(i).getCardType() == CardType.CREATURE) {
+                count++;
+            }
+        }
+        return count;
     }
 
     /**
      * Get the total power of all creature cards in the graveyard.
      */
     public int totalCreaturePower() {
-        return cards.stream()
-                .filter(c -> c instanceof Card.Creature)
-                .mapToInt(c -> ((Card.Creature) c).getPower())
-                .sum();
+        int totalPower = 0;
+        for (int i = 0; i < cards.size(); i++) {
+            Card card = cards.get(i);
+            if (card instanceof Card.Creature creature) {
+                totalPower += creature.getPower();
+            }
+        }
+        return totalPower;
     }
 
     /**
      * Get all creature cards in the graveyard.
      */
     public List<Card> getCreatures() {
-        return cards.stream()
-                .filter(c -> c.getCardType() == CardType.CREATURE)
-                .toList();
+        List<Card> creatures = new ArrayList<>();
+        for (int i = 0; i < cards.size(); i++) {
+            Card card = cards.get(i);
+            if (card.getCardType() == CardType.CREATURE) {
+                creatures.add(card);
+            }
+        }
+        return creatures;
     }
 
     /**

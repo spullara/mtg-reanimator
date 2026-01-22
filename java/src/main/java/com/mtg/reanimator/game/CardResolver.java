@@ -53,9 +53,15 @@ public class CardResolver {
      * Check if Ardyn, the Usurper is on the battlefield.
      */
     public static boolean hasArdynOnBattlefield(GameState state) {
-        return state.getBattlefield().getPermanents().stream()
-                .anyMatch(p -> p.getName() == "Ardyn, the Usurper"
-                        || "Ardyn, the Usurper" == p.getIsCopyOf());
+        List<Permanent> permanents = state.getBattlefield().getPermanents();
+        for (int i = 0; i < permanents.size(); i++) {
+            Permanent p = permanents.get(i);
+            if (p.getName() == "Ardyn, the Usurper"
+                    || "Ardyn, the Usurper" == p.getIsCopyOf()) {
+                return true;
+            }
+        }
+        return false;
     }
 
     /**
@@ -92,9 +98,13 @@ public class CardResolver {
                 }
                 case FASTLAND -> {
                     // Enter untapped if you control 2 or fewer other lands
-                    long landCount = state.getBattlefield().getPermanents().stream()
-                            .filter(p -> p.getCard() instanceof Card.Land)
-                            .count();
+                    int landCount = 0;
+                    List<Permanent> perms = state.getBattlefield().getPermanents();
+                    for (int i = 0; i < perms.size(); i++) {
+                        if (perms.get(i).getCard() instanceof Card.Land) {
+                            landCount++;
+                        }
+                    }
                     entersTapped = landCount >= 3;
                 }
                 case TOWN -> {
@@ -155,30 +165,48 @@ public class CardResolver {
      */
     public static String chooseCavernType(GameState state) {
         // Get creatures in hand
-        List<Card> creaturesInHand = state.getHand().getCards().stream()
-                .filter(c -> c instanceof Card.Creature)
-                .toList();
+        List<Card> handCards = state.getHand().getCards();
+        List<Card> creaturesInHand = new ArrayList<>();
+        for (int i = 0; i < handCards.size(); i++) {
+            Card c = handCards.get(i);
+            if (c instanceof Card.Creature) {
+                creaturesInHand.add(c);
+            }
+        }
 
         // Check if we already have a Cavern with Human type
-        boolean hasHumanCavern = state.getBattlefield().getPermanents().stream()
-                .anyMatch(p -> {
-                    if (p.getCard() instanceof Card.Land land) {
-                        return land.getName() == "Cavern of Souls"
-                                && "Human".equals(p.getChosenType());
-                    }
-                    return false;
-                });
+        boolean hasHumanCavern = false;
+        List<Permanent> perms = state.getBattlefield().getPermanents();
+        for (int i = 0; i < perms.size(); i++) {
+            Permanent p = perms.get(i);
+            if (p.getCard() instanceof Card.Land land) {
+                if (land.getName() == "Cavern of Souls"
+                        && "Human".equals(p.getChosenType())) {
+                    hasHumanCavern = true;
+                    break;
+                }
+            }
+        }
 
         // Check if we have another Cavern in hand
-        long cavernsInHand = state.getHand().getCards().stream()
-                .filter(c -> c.getName() == "Cavern of Souls")
-                .count();
+        int cavernsInHand = 0;
+        for (int i = 0; i < handCards.size(); i++) {
+            if (handCards.get(i).getName() == "Cavern of Souls") {
+                cavernsInHand++;
+            }
+        }
 
-        boolean hasKioraInHand = creaturesInHand.stream()
-                .anyMatch(c -> c.getName() == "Kiora, the Rising Tide");
-        boolean hasBringerOrTerrorInHand = creaturesInHand.stream()
-                .anyMatch(c -> c.getName() == "Bringer of the Last Gift"
-                        || c.getName() == "Terror of the Peaks");
+        boolean hasKioraInHand = false;
+        boolean hasBringerOrTerrorInHand = false;
+        for (int i = 0; i < creaturesInHand.size(); i++) {
+            String name = creaturesInHand.get(i).getName();
+            if (name == "Kiora, the Rising Tide") {
+                hasKioraInHand = true;
+            }
+            if (name == "Bringer of the Last Gift" || name == "Terror of the Peaks") {
+                hasBringerOrTerrorInHand = true;
+            }
+        }
 
         // Special case: If we have Kiora + Bringer/Terror in hand AND another Cavern coming,
         // set this one to Noble (cast Kiora first to discard Bringer/Terror)
@@ -188,13 +216,24 @@ public class CardResolver {
 
         if (hasHumanCavern) {
             // We already have Human covered, pick something else based on hand
-            if (creaturesInHand.stream().anyMatch(c -> c.getName() == "Bringer of the Last Gift")) {
+            boolean hasBringer = false;
+            boolean hasKiora = false;
+            boolean hasOverlord = false;
+            boolean hasTerror = false;
+            for (int i = 0; i < creaturesInHand.size(); i++) {
+                String name = creaturesInHand.get(i).getName();
+                if (name == "Bringer of the Last Gift") hasBringer = true;
+                if (name == "Kiora, the Rising Tide") hasKiora = true;
+                if (name == "Overlord of the Balemurk") hasOverlord = true;
+                if (name == "Terror of the Peaks") hasTerror = true;
+            }
+            if (hasBringer) {
                 return "Demon";
-            } else if (creaturesInHand.stream().anyMatch(c -> c.getName() == "Kiora, the Rising Tide")) {
+            } else if (hasKiora) {
                 return "Noble";
-            } else if (creaturesInHand.stream().anyMatch(c -> c.getName() == "Overlord of the Balemurk")) {
+            } else if (hasOverlord) {
                 return "Avatar";
-            } else if (creaturesInHand.stream().anyMatch(c -> c.getName() == "Terror of the Peaks")) {
+            } else if (hasTerror) {
                 return "Dragon";
             } else {
                 // No specific need, default to Demon (in case we draw Bringer)
@@ -308,17 +347,26 @@ public class CardResolver {
                     List<Card> milled = state.getLibrary().mill(4);
 
                     if (verbose) {
-                        String names = milled.stream().map(Card::getName).reduce((a, b) -> a + ", " + b).orElse("");
-                        System.out.println("    Mill 4: " + names);
+                        StringBuilder names = new StringBuilder();
+                        for (int i = 0; i < milled.size(); i++) {
+                            if (i > 0) names.append(", ");
+                            names.append(milled.get(i).getName());
+                        }
+                        System.out.println("    Mill 4: " + names.toString());
                     }
 
                     // Filter to permanents only (not instant/sorcery)
-                    List<Card> permanents = milled.stream()
-                            .filter(c -> !(c instanceof Card.Instant || c instanceof Card.Sorcery))
-                            .toList();
+                    boolean hasPermanent = false;
+                    for (int i = 0; i < milled.size(); i++) {
+                        Card c = milled.get(i);
+                        if (!(c instanceof Card.Instant || c instanceof Card.Sorcery)) {
+                            hasPermanent = true;
+                            break;
+                        }
+                    }
 
                     // Choose best card to return
-                    Card selected = !permanents.isEmpty() ? selectBestFromMill(milled, state) : null;
+                    Card selected = hasPermanent ? selectBestFromMill(milled, state) : null;
 
                     // Return selected card to hand, rest to graveyard
                     String selectedName = selected != null ? selected.getName() : null;
@@ -358,8 +406,12 @@ public class CardResolver {
                 List<Card> milled = state.getLibrary().mill(4);
 
                 if (verbose) {
-                    String names = milled.stream().map(Card::getName).reduce((a, b) -> a + ", " + b).orElse("");
-                    System.out.println("    Mill 4: " + names);
+                    StringBuilder names = new StringBuilder();
+                    for (int i = 0; i < milled.size(); i++) {
+                        if (i > 0) names.append(", ");
+                        names.append(milled.get(i).getName());
+                    }
+                    System.out.println("    Mill 4: " + names.toString());
                 }
 
                 // Choose which card to return (prioritize Spider-Man, then Kiora, then lands)
@@ -579,8 +631,12 @@ public class CardResolver {
                     state.getGraveyard().add(c);
                 }
                 if (verbose) {
-                    String names = milled.stream().map(Card::getName).reduce((a, b) -> a + ", " + b).orElse("");
-                    System.out.println("    " + sagaName + " Chapter II: Mill 3 - " + names);
+                    StringBuilder names = new StringBuilder();
+                    for (int i = 0; i < milled.size(); i++) {
+                        if (i > 0) names.append(", ");
+                        names.append(milled.get(i).getName());
+                    }
+                    System.out.println("    " + sagaName + " Chapter II: Mill 3 - " + names.toString());
                 }
             }
             case 3 -> {
@@ -622,13 +678,7 @@ public class CardResolver {
      * Helper to find and remove a card from the library by name.
      */
     private static Card findAndRemoveFromLibrary(Library library, String cardName) {
-        List<Card> cards = library.getCardsMutable();
-        for (int i = 0; i < cards.size(); i++) {
-            if (cards.get(i).getName().equals(cardName)) {
-                return cards.remove(i);
-            }
-        }
-        return null;
+        return library.findAndRemove(cardName);
     }
 
     /**
@@ -744,9 +794,13 @@ public class CardResolver {
             }
         }
 
-        long otherCreaturesCount = graveyardCards.stream()
-                .filter(c -> c instanceof Card.Creature && c.getName() != "Ardyn, the Usurper")
-                .count();
+        int otherCreaturesCount = 0;
+        for (int i = 0; i < graveyardCards.size(); i++) {
+            Card c = graveyardCards.get(i);
+            if (c instanceof Card.Creature && c.getName() != "Ardyn, the Usurper") {
+                otherCreaturesCount++;
+            }
+        }
 
         if (ardynIdx >= 0 && otherCreaturesCount >= 1) {
             if (verbose) {
@@ -764,9 +818,13 @@ public class CardResolver {
         }
 
         // Priority 3: If no Bringer/Ardyn but have another Spider-Man in hand, copy a mill creature
-        long spiderManInHand = state.getHand().getCards().stream()
-                .filter(c -> c.getName() == "Superior Spider-Man")
-                .count();
+        int spiderManInHand = 0;
+        List<Card> handCards = state.getHand().getCards();
+        for (int i = 0; i < handCards.size(); i++) {
+            if (handCards.get(i).getName() == "Superior Spider-Man") {
+                spiderManInHand++;
+            }
+        }
 
         if (spiderManInHand >= 1) {
             // We have another Spider-Man - copy a mill creature to dig for Bringer
@@ -882,33 +940,53 @@ public class CardResolver {
         }
 
         // Step 2: Return ALL creature cards from graveyard to battlefield
-        List<Card> creaturesToReanimate = state.getGraveyard().getCards().stream()
-                .filter(c -> c instanceof Card.Creature)
-                .toList();
+        List<Card> gyCards = state.getGraveyard().getCards();
+        List<Card> creaturesToReanimate = new ArrayList<>();
+        for (int i = 0; i < gyCards.size(); i++) {
+            Card c = gyCards.get(i);
+            if (c instanceof Card.Creature) {
+                creaturesToReanimate.add(c);
+            }
+        }
 
         if (verbose && !creaturesToReanimate.isEmpty()) {
-            String names = creaturesToReanimate.stream().map(Card::getName).reduce((a, b) -> a + ", " + b).orElse("");
-            System.out.println("    Reanimate: " + names);
+            StringBuilder names = new StringBuilder();
+            for (int i = 0; i < creaturesToReanimate.size(); i++) {
+                if (i > 0) names.append(", ");
+                names.append(creaturesToReanimate.get(i).getName());
+            }
+            System.out.println("    Reanimate: " + names.toString());
         }
 
         // Handle Superior Spider-Man's copy choice BEFORE clearing graveyard
-        boolean spiderManBeingReanimated = creaturesToReanimate.stream()
-                .anyMatch(c -> c.getName() == "Superior Spider-Man");
+        boolean spiderManBeingReanimated = false;
+        for (int i = 0; i < creaturesToReanimate.size(); i++) {
+            if (creaturesToReanimate.get(i).getName() == "Superior Spider-Man") {
+                spiderManBeingReanimated = true;
+                break;
+            }
+        }
 
         String spiderManCopyTarget = null;
         if (spiderManBeingReanimated) {
             // Look for Terror of the Peaks in graveyard to copy
-            boolean terrorInGraveyard = state.getGraveyard().getCards().stream()
-                    .anyMatch(c -> c.getName() == "Terror of the Peaks");
+            boolean terrorInGraveyard = false;
+            List<Card> currentGyCards = state.getGraveyard().getCards();
+            for (int i = 0; i < currentGyCards.size(); i++) {
+                if (currentGyCards.get(i).getName() == "Terror of the Peaks") {
+                    terrorInGraveyard = true;
+                    break;
+                }
+            }
 
             if (terrorInGraveyard) {
                 if (verbose) {
                     System.out.println("    Superior Spider-Man (reanimated) copies Terror of the Peaks!");
                 }
                 // Remove Terror from graveyard and exile it
-                List<Card> gyCards = state.getGraveyard().getCards();
-                for (int i = 0; i < gyCards.size(); i++) {
-                    if (gyCards.get(i).getName() == "Terror of the Peaks") {
+                List<Card> terrorGyCards = state.getGraveyard().getCards();
+                for (int i = 0; i < terrorGyCards.size(); i++) {
+                    if (terrorGyCards.get(i).getName() == "Terror of the Peaks") {
                         Card terror = state.getGraveyard().remove(i);
                         if (terror != null) {
                             state.addToExile(terror);
@@ -963,10 +1041,15 @@ public class CardResolver {
      */
     public static void resolveTerrorTriggers(GameState state, List<Card> entering, boolean verbose) {
         // Count how many Terrors are on the battlefield
-        int terrorCount = (int) state.getBattlefield().getPermanents().stream()
-                .filter(p -> p.getName() == "Terror of the Peaks"
-                        || "Terror of the Peaks" == p.getIsCopyOf())
-                .count();
+        int terrorCount = 0;
+        List<Permanent> perms = state.getBattlefield().getPermanents();
+        for (int i = 0; i < perms.size(); i++) {
+            Permanent p = perms.get(i);
+            if (p.getName() == "Terror of the Peaks"
+                    || "Terror of the Peaks" == p.getIsCopyOf()) {
+                terrorCount++;
+            }
+        }
 
         if (terrorCount == 0) {
             return;
@@ -1025,8 +1108,14 @@ public class CardResolver {
             // Graveyard: Bringer, Terror, Overlord (want to reanimate these)
             // Also put Kiora if we already have one (for reanimation value)
             // Top: Spider-Man (MUST stay in hand!), lands, mill spells
-            boolean hasKioraInHand = state.getHand().getCards().stream()
-                    .anyMatch(c -> c.getName() == "Kiora, the Rising Tide");
+            boolean hasKioraInHand = false;
+            List<Card> handCards = state.getHand().getCards();
+            for (int j = 0; j < handCards.size(); j++) {
+                if (handCards.get(j).getName() == "Kiora, the Rising Tide") {
+                    hasKioraInHand = true;
+                    break;
+                }
+            }
 
             boolean putInGraveyard = cardName == "Bringer of the Last Gift"
                     || cardName == "Terror of the Peaks"
@@ -1066,20 +1155,38 @@ public class CardResolver {
         List<Card> milled = state.getLibrary().mill(4);
 
         if (verbose) {
-            String millNames = milled.stream().map(Card::getName).reduce((a, b) -> a + ", " + b).orElse("");
-            System.out.println("    Mill 4: " + millNames);
+            StringBuilder millNames = new StringBuilder();
+            for (int i = 0; i < milled.size(); i++) {
+                if (i > 0) millNames.append(", ");
+                millNames.append(milled.get(i).getName());
+            }
+            System.out.println("    Mill 4: " + millNames.toString());
         }
 
         // Check game state for selection logic
-        boolean hasBringerInGy = state.getGraveyard().getCards().stream()
-                .anyMatch(c -> c.getName() == "Bringer of the Last Gift");
-        boolean hasSpiderInHand = state.getHand().getCards().stream()
-                .anyMatch(c -> c.getName() == "Superior Spider-Man");
-        boolean hasBringerInHand = state.getHand().getCards().stream()
-                .anyMatch(c -> c.getName() == "Bringer of the Last Gift");
-        long landCount = state.getBattlefield().getPermanents().stream()
-                .filter(p -> p.getCard() instanceof Card.Land)
-                .count();
+        boolean hasBringerInGy = false;
+        List<Card> gyCards = state.getGraveyard().getCards();
+        for (int i = 0; i < gyCards.size(); i++) {
+            if (gyCards.get(i).getName() == "Bringer of the Last Gift") {
+                hasBringerInGy = true;
+                break;
+            }
+        }
+        boolean hasSpiderInHand = false;
+        boolean hasBringerInHand = false;
+        List<Card> handCards = state.getHand().getCards();
+        for (int i = 0; i < handCards.size(); i++) {
+            String name = handCards.get(i).getName();
+            if (name == "Superior Spider-Man") hasSpiderInHand = true;
+            if (name == "Bringer of the Last Gift") hasBringerInHand = true;
+        }
+        int landCount = 0;
+        List<Permanent> perms = state.getBattlefield().getPermanents();
+        for (int i = 0; i < perms.size(); i++) {
+            if (perms.get(i).getCard() instanceof Card.Land) {
+                landCount++;
+            }
+        }
 
         Integer selectedIdx = null;
 
@@ -1148,8 +1255,12 @@ public class CardResolver {
         List<Card> milled = state.getLibrary().mill(4);
 
         if (verbose) {
-            String millNames = milled.stream().map(Card::getName).reduce((a, b) -> a + ", " + b).orElse("");
-            System.out.println("    Mill 4: " + millNames);
+            StringBuilder millNames = new StringBuilder();
+            for (int i = 0; i < milled.size(); i++) {
+                if (i > 0) millNames.append(", ");
+                millNames.append(milled.get(i).getName());
+            }
+            System.out.println("    Mill 4: " + millNames.toString());
         }
 
         // Find best land to return
@@ -1229,8 +1340,12 @@ public class CardResolver {
         }
 
         if (verbose && !drawn.isEmpty()) {
-            String names = drawn.stream().map(Card::getName).reduce((a, b) -> a + ", " + b).orElse("");
-            System.out.println("    Drew: " + names);
+            StringBuilder sb = new StringBuilder();
+            for (int i = 0; i < drawn.size(); i++) {
+                if (i > 0) sb.append(", ");
+                sb.append(drawn.get(i).getName());
+            }
+            System.out.println("    Drew: " + sb);
         }
 
         // Discard 2
@@ -1242,8 +1357,12 @@ public class CardResolver {
         }
 
         if (verbose && !toDiscard.isEmpty()) {
-            String names = toDiscard.stream().map(Card::getName).reduce((a, b) -> a + ", " + b).orElse("");
-            System.out.println("    Discarded: " + names);
+            StringBuilder sb = new StringBuilder();
+            for (int i = 0; i < toDiscard.size(); i++) {
+                if (i > 0) sb.append(", ");
+                sb.append(toDiscard.get(i).getName());
+            }
+            System.out.println("    Discarded: " + sb);
         }
     }
 
@@ -1256,13 +1375,23 @@ public class CardResolver {
         List<Card> toDiscard = new ArrayList<>();
 
         // Count lands on battlefield
-        long landCount = state.getBattlefield().getPermanents().stream()
-                .filter(p -> p.getCard() instanceof Card.Land)
-                .count();
+        int landCount = 0;
+        List<Permanent> permanents = state.getBattlefield().getPermanents();
+        for (int i = 0; i < permanents.size(); i++) {
+            if (permanents.get(i).getCard() instanceof Card.Land) {
+                landCount++;
+            }
+        }
 
         // Check if we already have Bringer in graveyard
-        boolean hasBringerInGy = state.getGraveyard().getCards().stream()
-                .anyMatch(c -> c.getName() == "Bringer of the Last Gift");
+        boolean hasBringerInGy = false;
+        List<Card> gyCards = state.getGraveyard().getCards();
+        for (int i = 0; i < gyCards.size(); i++) {
+            if (gyCards.get(i).getName() == "Bringer of the Last Gift") {
+                hasBringerInGy = true;
+                break;
+            }
+        }
 
         while (toDiscard.size() < count && !hand.isEmpty()) {
             int bestIdx = -1;
@@ -1308,14 +1437,20 @@ public class CardResolver {
 
         // Priority 2: Excess lands (if we have enough)
         if (card instanceof Card.Land) {
-            long landsInHand = hand.stream().filter(c -> c instanceof Card.Land).count();
+            int landsInHand = 0;
+            for (int i = 0; i < hand.size(); i++) {
+                if (hand.get(i) instanceof Card.Land) landsInHand++;
+            }
             if (landCount >= 4 && landsInHand > 1) return 300;
             if (landCount >= 3 && landsInHand > 2) return 250;
         }
 
         // Priority 3: Duplicate creatures
         if (card instanceof Card.Creature) {
-            long copies = hand.stream().filter(c -> c.getName() == name).count();
+            int copies = 0;
+            for (int i = 0; i < hand.size(); i++) {
+                if (hand.get(i).getName() == name) copies++;
+            }
             if (copies > 1 && name != "Superior Spider-Man") return 200;
         }
 
@@ -1349,16 +1484,37 @@ public class CardResolver {
         List<Card> graveyard = state.getGraveyard().getCards();
         List<Card> library = state.getLibrary().getCards();
 
-        // Gather state
-        boolean hasSpiderMan = hand.stream().anyMatch(c -> c.getName() == "Superior Spider-Man");
-        boolean hasBringerInHand = hand.stream().anyMatch(c -> c.getName() == "Bringer of the Last Gift");
-        boolean hasTerrorInHand = hand.stream().anyMatch(c -> c.getName() == "Terror of the Peaks");
-        boolean hasArdynInHand = hand.stream().anyMatch(c -> c.getName() == "Ardyn, the Usurper");
-        boolean hasBringerInGy = graveyard.stream().anyMatch(c -> c.getName() == "Bringer of the Last Gift");
-        boolean hasTerrorInGy = graveyard.stream().anyMatch(c -> c.getName() == "Terror of the Peaks");
-        boolean hasKioraInHand = hand.stream().anyMatch(c -> c.getName() == "Kiora, the Rising Tide");
-        boolean hasOverlordInHand = hand.stream().anyMatch(c -> c.getName() == "Overlord of the Balemurk");
-        boolean spiderInLibrary = library.stream().anyMatch(c -> c.getName() == "Superior Spider-Man");
+        // Gather state from hand (single pass)
+        boolean hasSpiderMan = false, hasBringerInHand = false, hasTerrorInHand = false;
+        boolean hasArdynInHand = false, hasKioraInHand = false, hasOverlordInHand = false;
+        int kioraCount = 0, townGreeterCount = 0;
+        for (int i = 0; i < hand.size(); i++) {
+            String name = hand.get(i).getName();
+            if (name == "Superior Spider-Man") hasSpiderMan = true;
+            else if (name == "Bringer of the Last Gift") hasBringerInHand = true;
+            else if (name == "Terror of the Peaks") hasTerrorInHand = true;
+            else if (name == "Ardyn, the Usurper") hasArdynInHand = true;
+            else if (name == "Kiora, the Rising Tide") { hasKioraInHand = true; kioraCount++; }
+            else if (name == "Overlord of the Balemurk") hasOverlordInHand = true;
+            else if (name == "Town Greeter") townGreeterCount++;
+        }
+
+        // Gather state from graveyard (single pass)
+        boolean hasBringerInGy = false, hasTerrorInGy = false;
+        for (int i = 0; i < graveyard.size(); i++) {
+            String name = graveyard.get(i).getName();
+            if (name == "Bringer of the Last Gift") hasBringerInGy = true;
+            else if (name == "Terror of the Peaks") hasTerrorInGy = true;
+        }
+
+        // Check library for Spider-Man
+        boolean spiderInLibrary = false;
+        for (int i = 0; i < library.size(); i++) {
+            if (library.get(i).getName() == "Superior Spider-Man") {
+                spiderInLibrary = true;
+                break;
+            }
+        }
 
         String discardTarget = null;
         String tutorTarget = null;
@@ -1379,8 +1535,6 @@ public class CardResolver {
 
         // Priority 1.5: If no Spider-Man but Bringer in GY - discard ANY mill creature to get Spider-Man
         if (tutorTarget == null && !hasSpiderMan && hasBringerInGy && spiderInLibrary) {
-            long kioraCount = hand.stream().filter(c -> c.getName() == "Kiora, the Rising Tide").count();
-            long townGreeterCount = hand.stream().filter(c -> c.getName() == "Town Greeter").count();
 
             if (kioraCount > 1) {
                 discardTarget = "Kiora, the Rising Tide";
@@ -1420,7 +1574,13 @@ public class CardResolver {
         // Priority 3: Spider-Man + Bringer in GY but no Terror -> discard land to get Terror
         if (tutorTarget == null && hasSpiderMan && hasBringerInGy && !hasTerrorInGy && !hasTerrorInHand) {
             // Find a land to discard
-            boolean hasLandInHand = hand.stream().anyMatch(c -> c instanceof Card.Land);
+            boolean hasLandInHand = false;
+            for (int i = 0; i < hand.size(); i++) {
+                if (hand.get(i) instanceof Card.Land) {
+                    hasLandInHand = true;
+                    break;
+                }
+            }
             if (hasLandInHand) {
                 discardTarget = "land"; // special marker
                 tutorTarget = "Terror of the Peaks";
@@ -1497,22 +1657,61 @@ public class CardResolver {
     public static int calculateComboDamage(GameState state) {
         boolean ardynOnBattlefield = hasArdynOnBattlefield(state);
 
-        // Creatures in graveyard that would be reanimated
-        List<Card> creaturesInGraveyard = state.getGraveyard().getCards().stream()
-                .filter(c -> c instanceof Card.Creature)
-                .toList();
+        // Creatures in graveyard that would be reanimated - use indexed loop
+        List<Card> gyCards = state.getGraveyard().getCards();
+        int creaturesInGraveyardCount = 0;
+        int terrorsInGraveyard = 0;
+        int creaturePowerSum = 0;
+        int reanimatedDemonCombatPower = 0;
+
+        // Single pass through graveyard to collect all needed data
+        for (int i = 0; i < gyCards.size(); i++) {
+            Card c = gyCards.get(i);
+            if (c instanceof Card.Creature creature) {
+                creaturesInGraveyardCount++;
+                creaturePowerSum += creature.getPower();
+                if (c.getName() == CardNames.TERROR_OF_THE_PEAKS) {
+                    terrorsInGraveyard++;
+                }
+                if (ardynOnBattlefield && isCreatureDemon(c)) {
+                    reanimatedDemonCombatPower += creature.getPower();
+                }
+            }
+        }
 
         final int BRINGER_POWER = 6; // Spider-Man copies Bringer
 
-        // Count Terrors
-        int terrorsInGraveyard = (int) creaturesInGraveyard.stream()
-                .filter(c -> c.getName().equals("Terror of the Peaks"))
-                .count();
+        // Count Terrors on battlefield - use indexed loop
+        List<Permanent> permanents = state.getBattlefield().getPermanents();
+        int terrorsOnBattlefield = 0;
+        int currentCombatPower = 0;
+        int currentTurn = state.getTurn();
 
-        int terrorsOnBattlefield = (int) state.getBattlefield().getPermanents().stream()
-                .filter(p -> p.getName().equals("Terror of the Peaks")
-                        || "Terror of the Peaks".equals(p.getIsCopyOf()))
-                .count();
+        for (int i = 0; i < permanents.size(); i++) {
+            Permanent p = permanents.get(i);
+            // Check for Terror
+            if (p.getName() == CardNames.TERROR_OF_THE_PEAKS
+                    || CardNames.TERROR_OF_THE_PEAKS.equals(p.getIsCopyOf())) {
+                terrorsOnBattlefield++;
+            }
+
+            // Check for combat power
+            if (p.getCard() instanceof Card.Creature creature) {
+                // Check for impending counters
+                int timeCounters = p.getCounter(CounterType.TIME);
+                if (timeCounters > 0) continue;
+                // Check summoning sickness
+                boolean hasSummoningSickness = currentTurn <= p.getTurnEntered();
+                if (hasSummoningSickness) {
+                    // Demons get haste from Ardyn
+                    if (ardynOnBattlefield && isCreatureDemon(p.getCard())) {
+                        currentCombatPower += creature.getPower();
+                    }
+                } else {
+                    currentCombatPower += creature.getPower();
+                }
+            }
+        }
 
         int totalTerrors = terrorsOnBattlefield + terrorsInGraveyard;
 
@@ -1521,54 +1720,12 @@ public class CardResolver {
         int terrorDamage = BRINGER_POWER * totalTerrors;
 
         // Each creature in graveyard triggers Terror (they enter at the same time)
-        for (Card creature : creaturesInGraveyard) {
-            if (creature instanceof Card.Creature c) {
-                // Each creature triggers ALL Terrors (including those in graveyard that will be there)
-                terrorDamage += c.getPower() * totalTerrors;
-            }
-        }
+        // We already computed the sum of creature powers
+        terrorDamage += creaturePowerSum * totalTerrors;
 
         // Terrors trigger on each other (but not themselves)
         if (terrorsInGraveyard > 1) {
             terrorDamage += 3 * terrorsInGraveyard * (terrorsInGraveyard - 1);
-        }
-
-        // Combat damage from creatures without summoning sickness
-        int currentCombatPower = state.getBattlefield().getPermanents().stream()
-                .filter(p -> {
-                    if (!(p.getCard() instanceof Card.Creature)) return false;
-                    // Check for impending counters
-                    int timeCounters = p.getCounter(CounterType.TIME);
-                    if (timeCounters > 0) return false;
-                    // Check summoning sickness
-                    boolean hasSummoningSickness = state.getTurn() <= p.getTurnEntered();
-                    if (hasSummoningSickness) {
-                        // Demons get haste from Ardyn
-                        if (ardynOnBattlefield && isCreatureDemon(p.getCard())) return true;
-                        return false;
-                    }
-                    return true;
-                })
-                .mapToInt(p -> {
-                    if (p.getCard() instanceof Card.Creature c) {
-                        return c.getPower();
-                    }
-                    return 0;
-                })
-                .sum();
-
-        // Reanimated Demons get haste from Ardyn
-        int reanimatedDemonCombatPower = 0;
-        if (ardynOnBattlefield) {
-            reanimatedDemonCombatPower = creaturesInGraveyard.stream()
-                    .filter(CardResolver::isCreatureDemon)
-                    .mapToInt(c -> {
-                        if (c instanceof Card.Creature creature) {
-                            return creature.getPower();
-                        }
-                        return 0;
-                    })
-                    .sum();
         }
 
         return terrorDamage + currentCombatPower + reanimatedDemonCombatPower;

@@ -46,11 +46,11 @@ public class GameState {
     private GameRng rng;
 
     public GameState() {
-        this.library = new Library();
-        this.hand = new Hand();
-        this.graveyard = new Graveyard();
-        this.battlefield = new Battlefield();
-        this.exile = new Exile();
+        this.library = new Library(60);       // Typical deck size
+        this.hand = new Hand(8);              // Mulligan + draws
+        this.graveyard = new Graveyard(30);   // Half the deck is reasonable
+        this.battlefield = new Battlefield(15); // Lands + creatures
+        this.exile = new Exile(10);           // Few cards typically exiled
         this.turn = 0;
         this.phase = Phase.UNTAP;
         this.onThePlay = false;
@@ -281,22 +281,36 @@ public class GameState {
     /**
      * Reset game state for reuse without reallocating.
      */
+    /**
+     * Reset game state for reuse without reallocating.
+     * Reuses existing collections by clearing them instead of creating new ones.
+     */
     public void reset() {
-        library = new Library();
-        hand = new Hand();
-        graveyard = new Graveyard();
-        battlefield = new Battlefield();
-        exile = new Exile();
+        // Clear zones without reallocating
+        library.clear();
+        hand.clear();
+        graveyard.clear();
+        battlefield.clear();
+        exile.clear();
+
+        // Reset game info
         turn = 0;
         phase = Phase.UNTAP;
         onThePlay = false;
         landPlayedThisTurn = false;
         landPlaysRemaining = 1;
+
+        // Reset life totals
         life = 20;
         opponentLife = 20;
+
+        // Reset win/combo tracking
         hasWon = false;
         comboDamageDealt = 0;
-        manaPool = new ManaPool();
+
+        // Clear mana pool
+        manaPool.clear();
+
         // Note: rng is not reset - use setRng to provide a new one if needed
     }
 }

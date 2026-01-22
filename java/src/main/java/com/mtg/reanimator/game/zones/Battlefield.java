@@ -56,52 +56,77 @@ public class Battlefield {
      * Get all land permanents.
      */
     public List<Permanent> getLands() {
-        return permanents.stream()
-                .filter(Permanent::isLand)
-                .toList();
+        List<Permanent> lands = new ArrayList<>(8);
+        for (int i = 0; i < permanents.size(); i++) {
+            Permanent p = permanents.get(i);
+            if (p.isLand()) {
+                lands.add(p);
+            }
+        }
+        return lands;
     }
 
     /**
      * Get all untapped land permanents.
      */
     public List<Permanent> getUntappedLands() {
-        return permanents.stream()
-                .filter(p -> p.isLand() && !p.isTapped())
-                .toList();
+        List<Permanent> lands = new ArrayList<>(8);
+        for (int i = 0; i < permanents.size(); i++) {
+            Permanent p = permanents.get(i);
+            if (p.isLand() && !p.isTapped()) {
+                lands.add(p);
+            }
+        }
+        return lands;
     }
 
     /**
      * Get all creature permanents.
      */
     public List<Permanent> getCreatures() {
-        return permanents.stream()
-                .filter(p -> p.getCard().getCardType() == CardType.CREATURE)
-                .toList();
+        List<Permanent> creatures = new ArrayList<>(8);
+        for (int i = 0; i < permanents.size(); i++) {
+            Permanent p = permanents.get(i);
+            if (p.getCard().getCardType() == CardType.CREATURE) {
+                creatures.add(p);
+            }
+        }
+        return creatures;
     }
 
     /**
      * Count permanents with the given name.
      */
     public int countByName(String name) {
-        return (int) permanents.stream()
-                .filter(p -> p.getName().equals(name))
-                .count();
+        int count = 0;
+        for (int i = 0; i < permanents.size(); i++) {
+            if (permanents.get(i).getName() == name) {  // interned strings
+                count++;
+            }
+        }
+        return count;
     }
 
     /**
      * Find a permanent by name.
      */
     public Optional<Permanent> findByName(String name) {
-        return permanents.stream()
-                .filter(p -> p.getName().equals(name))
-                .findFirst();
+        for (int i = 0; i < permanents.size(); i++) {
+            Permanent p = permanents.get(i);
+            if (p.getName() == name) {  // interned strings
+                return Optional.of(p);
+            }
+        }
+        return Optional.empty();
     }
 
     /**
      * Untap all permanents.
      */
     public void untapAll() {
-        permanents.forEach(Permanent::untap);
+        for (int i = 0; i < permanents.size(); i++) {
+            permanents.get(i).untap();
+        }
     }
 
     /**

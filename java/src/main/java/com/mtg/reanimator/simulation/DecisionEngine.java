@@ -84,9 +84,13 @@ public final class DecisionEngine {
         int manaAfterLandDrop = manaAvailable + 1;
 
         // Find non-land cards (spells) in hand
-        List<Card> spells = hand.stream()
-                .filter(c -> !(c instanceof Card.Land))
-                .toList();
+        List<Card> spells = new ArrayList<>();
+        for (int i = 0; i < hand.size(); i++) {
+            Card c = hand.get(i);
+            if (!(c instanceof Card.Land)) {
+                spells.add(c);
+            }
+        }
 
         // Calculate missing colors needed for spells
         Set<ManaColor> missingColors = new HashSet<>();
@@ -298,9 +302,13 @@ public final class DecisionEngine {
         boolean hasSpiderInHand = state.getHand().contains("Superior Spider-Man");
         boolean hasBringerInHand = state.getHand().contains("Bringer of the Last Gift");
         int landCount = state.getBattlefield().getLands().size();
-        long landsInHand = state.getHand().getCards().stream()
-                .filter(c -> c instanceof Card.Land)
-                .count();
+        int landsInHand = 0;
+        List<Card> handCards = state.getHand().getCards();
+        for (int i = 0; i < handCards.size(); i++) {
+            if (handCards.get(i) instanceof Card.Land) {
+                landsInHand++;
+            }
+        }
 
         // Priority 1: Superior Spider-Man (unless we already have one)
         if (!hasSpiderInHand) {

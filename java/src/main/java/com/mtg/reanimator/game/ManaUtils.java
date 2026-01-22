@@ -6,6 +6,8 @@ import com.mtg.reanimator.game.zones.Permanent;
 
 import java.util.*;
 
+import static com.mtg.reanimator.card.CardNames.*;
+
 /**
  * Mana utilities implementing scarcity-based land tapping algorithm.
  * Matches the Rust mana.rs implementation exactly.
@@ -36,7 +38,7 @@ public class ManaUtils {
         String name = land.getName();
 
         // Handle Cavern of Souls - colored mana ONLY for creatures of chosen type
-        if ("Cavern of Souls".equals(name)) {
+        if (name == CAVERN_OF_SOULS) {
             // Cavern always produces colorless
             // Produces any color ONLY for creatures of the chosen type
             if (forCreature != null && permanent.getChosenType() != null) {
@@ -51,7 +53,7 @@ public class ManaUtils {
         }
 
         // Handle Wastewood Verge - {B} only if controlling Swamp/Forest
-        if ("Wastewood Verge".equals(name)) {
+        if (name == WASTEWOOD_VERGE) {
             boolean hasSwampOrForest = hasLandNamed(battlefield,
                 "Swamp", "Forest", "Watery Grave", "Underground Mortuary", "Undercity Sewers");
             if (hasSwampOrForest) {
@@ -61,7 +63,7 @@ public class ManaUtils {
         }
 
         // Handle Gloomlake Verge - {B} only if controlling Island/Swamp
-        if ("Gloomlake Verge".equals(name)) {
+        if (name == GLOOMLAKE_VERGE) {
             boolean hasIslandOrSwamp = hasLandNamed(battlefield,
                 "Island", "Swamp", "Watery Grave", "Undercity Sewers");
             if (hasIslandOrSwamp) {
@@ -71,7 +73,7 @@ public class ManaUtils {
         }
 
         // Handle Multiversal Passage - produces chosen color
-        if ("Multiversal Passage".equals(name)) {
+        if (name == MULTIVERSAL_PASSAGE) {
             String chosenType = permanent.getChosenBasicType();
             if (chosenType != null) {
                 try {
@@ -87,7 +89,7 @@ public class ManaUtils {
         }
 
         // Handle Starting Town - produces C for free, or any color for 1 life
-        if ("Starting Town".equals(name)) {
+        if (name == STARTING_TOWN) {
             if (life > 1) {
                 // Can pay 1 life for any color
                 return new ColorFlags(ColorFlags.COLORLESS | ColorFlags.WHITE | ColorFlags.BLUE |
@@ -109,8 +111,13 @@ public class ManaUtils {
      * Check if a creature matches a Cavern of Souls chosen type.
      */
     private static boolean creatureMatchesCavernType(CreatureCard creature, String chosenType) {
-        return creature.getCreatureTypes().stream()
-            .anyMatch(type -> type.equalsIgnoreCase(chosenType));
+        List<String> types = creature.getCreatureTypes();
+        for (int i = 0; i < types.size(); i++) {
+            if (types.get(i).equalsIgnoreCase(chosenType)) {
+                return true;
+            }
+        }
+        return false;
     }
 
     /**
@@ -157,11 +164,14 @@ public class ManaUtils {
             int remaining = req.amount;
 
             // Collect lands that can produce this color, sorted by flexibility
-            List<LandCandidate> candidates = landInfo.stream()
-                .filter(li -> !usedIndices.contains(li.index) && li.colors.contains(req.color))
-                .map(li -> new LandCandidate(li.index, li.colors.count()))
-                .sorted(Comparator.comparingInt(c -> c.colorCount))
-                .toList();
+            List<LandCandidate> candidates = new ArrayList<>(landInfo.size());
+            for (int i = 0; i < landInfo.size(); i++) {
+                LandInfo li = landInfo.get(i);
+                if (!usedIndices.contains(li.index) && li.colors.contains(req.color)) {
+                    candidates.add(new LandCandidate(li.index, li.colors.count()));
+                }
+            }
+            candidates.sort(Comparator.comparingInt(c -> c.colorCount));
 
             for (LandCandidate candidate : candidates) {
                 if (remaining == 0) break;
@@ -176,9 +186,12 @@ public class ManaUtils {
 
         // Check if we can pay generic with remaining lands
         int genericRemaining = cost.getGeneric();
-        long availableForGeneric = landInfo.stream()
-            .filter(li -> !usedIndices.contains(li.index))
-            .count();
+        int availableForGeneric = 0;
+        for (int i = 0; i < landInfo.size(); i++) {
+            if (!usedIndices.contains(landInfo.get(i).index)) {
+                availableForGeneric++;
+            }
+        }
 
         return availableForGeneric >= genericRemaining;
     }
@@ -217,11 +230,14 @@ public class ManaUtils {
             int remaining = req.amount;
 
             // Get lands that can produce this color, sorted by flexibility (fewer colors = less flexible = use first)
-            List<LandCandidate> candidates = landInfo.stream()
-                .filter(li -> !usedIndices.contains(li.index) && li.colors.contains(req.color))
-                .map(li -> new LandCandidate(li.index, li.colors.count()))
-                .sorted(Comparator.comparingInt(c -> c.colorCount))
-                .toList();
+            List<LandCandidate> candidates = new ArrayList<>(landInfo.size());
+            for (int i = 0; i < landInfo.size(); i++) {
+                LandInfo li = landInfo.get(i);
+                if (!usedIndices.contains(li.index) && li.colors.contains(req.color)) {
+                    candidates.add(new LandCandidate(li.index, li.colors.count()));
+                }
+            }
+            candidates.sort(Comparator.comparingInt(c -> c.colorCount));
 
             for (LandCandidate candidate : candidates) {
                 if (remaining == 0) break;
@@ -237,10 +253,14 @@ public class ManaUtils {
 
         // Pay generic with remaining untapped lands (prefer least flexible)
         int genericRemaining = cost.getGeneric();
-        List<LandInfo> genericCandidates = landInfo.stream()
-            .filter(li -> !usedIndices.contains(li.index))
-            .sorted(Comparator.comparingInt(li -> li.colors.count()))
-            .toList();
+        List<LandInfo> genericCandidates = new ArrayList<>(landInfo.size());
+        for (int i = 0; i < landInfo.size(); i++) {
+            LandInfo li = landInfo.get(i);
+            if (!usedIndices.contains(li.index)) {
+                genericCandidates.add(li);
+            }
+        }
+        genericCandidates.sort(Comparator.comparingInt(li -> li.colors.count()));
 
         for (LandInfo li : genericCandidates) {
             if (genericRemaining == 0) break;
@@ -309,9 +329,13 @@ public class ManaUtils {
      * Count how many lands can produce a given color.
      */
     private static int countLandsProducingColor(List<LandInfo> landInfo, ManaColor color) {
-        return (int) landInfo.stream()
-            .filter(li -> li.colors.contains(color))
-            .count();
+        int count = 0;
+        for (int i = 0; i < landInfo.size(); i++) {
+            if (landInfo.get(i).colors.contains(color)) {
+                count++;
+            }
+        }
+        return count;
     }
 
     /**

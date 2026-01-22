@@ -174,9 +174,15 @@ public final class SimulationEngine {
      * Check if Ardyn, the Usurper is on the battlefield.
      */
     public static boolean hasArdynOnBattlefield(GameState state) {
-        return state.getBattlefield().getPermanents().stream()
-            .anyMatch(p -> CardNames.is(p.getName(), CardNames.ARDYN_THE_USURPER)
-                || CardNames.is(p.getIsCopyOf(), CardNames.ARDYN_THE_USURPER));
+        List<Permanent> perms = state.getBattlefield().getPermanents();
+        for (int i = 0; i < perms.size(); i++) {
+            Permanent p = perms.get(i);
+            if (CardNames.is(p.getName(), CardNames.ARDYN_THE_USURPER)
+                || CardNames.is(p.getIsCopyOf(), CardNames.ARDYN_THE_USURPER)) {
+                return true;
+            }
+        }
+        return false;
     }
 
     /**
@@ -204,7 +210,13 @@ public final class SimulationEngine {
      * Count lands in a list of cards.
      */
     private static int countLands(List<Card> cards) {
-        return (int) cards.stream().filter(c -> c instanceof Card.Land).count();
+        int count = 0;
+        for (int i = 0; i < cards.size(); i++) {
+            if (cards.get(i) instanceof Card.Land) {
+                count++;
+            }
+        }
+        return count;
     }
 
     /**
@@ -233,12 +245,25 @@ public final class SimulationEngine {
         }
 
         // Check for mill enablers - always keep if we have one
-        if (hand.stream().anyMatch(SimulationEngine::isMillEnabler)) {
+        boolean hasMillEnabler = false;
+        for (int i = 0; i < hand.size(); i++) {
+            if (isMillEnabler(hand.get(i))) {
+                hasMillEnabler = true;
+                break;
+            }
+        }
+        if (hasMillEnabler) {
             return lands < 2;
         }
 
         // Check for playable early spells
-        boolean hasEarlySpell = hand.stream().anyMatch(SimulationEngine::isPlayableEarlySpell);
+        boolean hasEarlySpell = false;
+        for (int i = 0; i < hand.size(); i++) {
+            if (isPlayableEarlySpell(hand.get(i))) {
+                hasEarlySpell = true;
+                break;
+            }
+        }
 
         // Keep if we have 2-5 lands and at least one early spell
         if (lands >= 2 && lands <= 5 && hasEarlySpell) {
@@ -455,10 +480,15 @@ public final class SimulationEngine {
             tokenPerm.setIsCopyOf(creatureName);
 
             // Count Terrors BEFORE adding the token - Terror triggers on "another creature"
-            long terrorCount = state.getBattlefield().getPermanents().stream()
-                    .filter(p -> CardNames.is(p.getName(), CardNames.TERROR_OF_THE_PEAKS)
-                            || CardNames.is(p.getIsCopyOf(), CardNames.TERROR_OF_THE_PEAKS))
-                    .count();
+            List<Permanent> battlefieldPerms = state.getBattlefield().getPermanents();
+            int terrorCount = 0;
+            for (int i = 0; i < battlefieldPerms.size(); i++) {
+                Permanent p = battlefieldPerms.get(i);
+                if (CardNames.is(p.getName(), CardNames.TERROR_OF_THE_PEAKS)
+                        || CardNames.is(p.getIsCopyOf(), CardNames.TERROR_OF_THE_PEAKS)) {
+                    terrorCount++;
+                }
+            }
 
             state.getBattlefield().addPermanent(tokenPerm);
 
@@ -608,10 +638,15 @@ public final class SimulationEngine {
         TurnManager.precombatMainPhaseStart(state, verbose);
 
         if (verbose) {
-            List<String> handNames = state.getHand().getCards().stream()
-                    .map(Card::getName)
-                    .toList();
-            System.out.println("[Main 1] Hand: " + String.join(", ", handNames));
+            List<Card> handCards2 = state.getHand().getCards();
+            StringBuilder handNamesBuilder = new StringBuilder();
+            for (int i = 0; i < handCards2.size(); i++) {
+                if (i > 0) {
+                    handNamesBuilder.append(", ");
+                }
+                handNamesBuilder.append(handCards2.get(i).getName());
+            }
+            System.out.println("[Main 1] Hand: " + handNamesBuilder);
         }
 
         executeMainPhase(state, db, verbose, rng);
@@ -631,25 +666,33 @@ public final class SimulationEngine {
         if (verbose) {
             System.out.println("[End of Turn " + state.getTurn() + "]");
 
-            List<String> battlefieldNames = state.getBattlefield().getPermanents().stream()
-                    .map(p -> {
-                        StringBuilder name = new StringBuilder(p.getCard().getName());
-                        if (p.getIsCopyOf() != null) {
-                            name.append(" (copy of ").append(p.getIsCopyOf()).append(")");
-                        }
-                        int timeCounters = p.getCounter(CounterType.TIME);
-                        if (timeCounters > 0) {
-                            name.append(" (").append(timeCounters).append(" time counters)");
-                        }
-                        return name.toString();
-                    })
-                    .toList();
-            System.out.println("  Battlefield: " + (battlefieldNames.isEmpty() ? "(empty)" : String.join(", ", battlefieldNames)));
+            List<Permanent> battlefieldPerms2 = state.getBattlefield().getPermanents();
+            StringBuilder battlefieldBuilder = new StringBuilder();
+            for (int i = 0; i < battlefieldPerms2.size(); i++) {
+                if (i > 0) {
+                    battlefieldBuilder.append(", ");
+                }
+                Permanent p = battlefieldPerms2.get(i);
+                battlefieldBuilder.append(p.getCard().getName());
+                if (p.getIsCopyOf() != null) {
+                    battlefieldBuilder.append(" (copy of ").append(p.getIsCopyOf()).append(")");
+                }
+                int timeCounters = p.getCounter(CounterType.TIME);
+                if (timeCounters > 0) {
+                    battlefieldBuilder.append(" (").append(timeCounters).append(" time counters)");
+                }
+            }
+            System.out.println("  Battlefield: " + (battlefieldPerms2.isEmpty() ? "(empty)" : battlefieldBuilder.toString()));
 
-            List<String> graveyardNames = state.getGraveyard().getCards().stream()
-                    .map(Card::getName)
-                    .toList();
-            System.out.println("  Graveyard: " + (graveyardNames.isEmpty() ? "(empty)" : String.join(", ", graveyardNames)));
+            List<Card> graveyardCards = state.getGraveyard().getCards();
+            StringBuilder graveyardBuilder = new StringBuilder();
+            for (int i = 0; i < graveyardCards.size(); i++) {
+                if (i > 0) {
+                    graveyardBuilder.append(", ");
+                }
+                graveyardBuilder.append(graveyardCards.get(i).getName());
+            }
+            System.out.println("  Graveyard: " + (graveyardCards.isEmpty() ? "(empty)" : graveyardBuilder.toString()));
 
             System.out.println("  Opponent life: " + state.getOpponentLife());
         }

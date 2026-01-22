@@ -8,6 +8,12 @@ import com.mtg.reanimator.card.ManaColor;
  * Matches the Rust ManaPool struct exactly.
  */
 public class ManaPool {
+    // Static array to avoid allocation in hot path
+    private static final ManaColor[] GENERIC_PAYMENT_ORDER = {
+        ManaColor.COLORLESS, ManaColor.WHITE, ManaColor.BLUE,
+        ManaColor.BLACK, ManaColor.RED, ManaColor.GREEN
+    };
+
     private int white;
     private int blue;
     private int black;
@@ -80,10 +86,8 @@ public class ManaPool {
 
         // Pay generic with remaining mana (prefer colorless, then excess colors)
         int genericRemaining = cost.getGeneric();
-        ManaColor[] colors = {ManaColor.COLORLESS, ManaColor.WHITE, ManaColor.BLUE, 
-                              ManaColor.BLACK, ManaColor.RED, ManaColor.GREEN};
 
-        for (ManaColor color : colors) {
+        for (ManaColor color : GENERIC_PAYMENT_ORDER) {
             if (genericRemaining == 0) break;
 
             int available = switch (color) {

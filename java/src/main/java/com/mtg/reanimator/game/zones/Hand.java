@@ -73,7 +73,12 @@ public class Hand {
      * Check if the hand contains a card with the given name.
      */
     public boolean contains(String cardName) {
-        return cards.stream().anyMatch(c -> c.getName().equals(cardName));
+        for (int i = 0; i < cards.size(); i++) {
+            if (cards.get(i).getName().equals(cardName)) {
+                return true;
+            }
+        }
+        return false;
     }
 
     /**
@@ -82,9 +87,13 @@ public class Hand {
      * @return The first card with the matching name, or empty if not found
      */
     public Optional<Card> findByName(String name) {
-        return cards.stream()
-                .filter(c -> c.getName().equals(name))
-                .findFirst();
+        for (int i = 0; i < cards.size(); i++) {
+            Card card = cards.get(i);
+            if (card.getName().equals(name)) {
+                return Optional.of(card);
+            }
+        }
+        return Optional.empty();
     }
 
     /**

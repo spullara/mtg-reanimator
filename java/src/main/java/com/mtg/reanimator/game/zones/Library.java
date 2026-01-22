@@ -3,7 +3,10 @@ package com.mtg.reanimator.game.zones;
 import com.mtg.reanimator.card.Card;
 import com.mtg.reanimator.rng.GameRng;
 
+import java.util.ArrayDeque;
 import java.util.ArrayList;
+import java.util.Deque;
+import java.util.Iterator;
 import java.util.List;
 import java.util.NoSuchElementException;
 import java.util.Optional;
@@ -12,16 +15,20 @@ import java.util.Optional;
  * Library (deck) - ordered stack of cards.
  * Matches the Rust Library struct.
  * Top of the library is at index 0.
+ *
+ * Uses ArrayDeque internally for O(1) operations at both ends:
+ * - draw() / removeFirst() is O(1) instead of O(n) with ArrayList
+ * - putOnTop() / addFirst() is O(1) instead of O(n) with ArrayList
  */
 public class Library {
-    private final List<Card> cards;
+    private Deque<Card> cards;
 
     public Library() {
-        this.cards = new ArrayList<>();
+        this.cards = new ArrayDeque<>();
     }
 
     public Library(int capacity) {
-        this.cards = new ArrayList<>(capacity);
+        this.cards = new ArrayDeque<>(capacity);
     }
 
     public void clear() {
@@ -29,17 +36,14 @@ public class Library {
     }
 
     public void addCard(Card card) {
-        cards.add(card);
+        cards.addLast(card);
     }
 
     /**
      * Peek at the top card without removing it.
      */
     public Optional<Card> peekTop() {
-        if (cards.isEmpty()) {
-            return Optional.empty();
-        }
-        return Optional.of(cards.getFirst());
+        return Optional.ofNullable(cards.peekFirst());
     }
 
     /**
@@ -48,10 +52,11 @@ public class Library {
      * @throws NoSuchElementException if the library is empty
      */
     public Card draw() {
-        if (cards.isEmpty()) {
+        Card card = cards.pollFirst();
+        if (card == null) {
             throw new NoSuchElementException("Cannot draw from empty library");
         }
-        return cards.removeFirst();
+        return card;
     }
 
     /**
@@ -104,9 +109,12 @@ public class Library {
 
     /**
      * Shuffle the library using the provided RNG.
+     * Converts to list, shuffles, then rebuilds the deque.
      */
     public void shuffle(GameRng rng) {
-        rng.shuffle(cards);
+        List<Card> list = new ArrayList<>(cards);
+        rng.shuffle(list);
+        cards = new ArrayDeque<>(list);
     }
 
     /**
@@ -117,10 +125,41 @@ public class Library {
     }
 
     /**
-     * Get direct access to the underlying card list (for mutation).
+     * Get a mutable list copy of the cards.
+     * Note: Changes to the returned list do NOT affect the library.
+     * Use findAndRemove() for searching and removing cards.
+     * @deprecated Prefer using findAndRemove() instead for search-and-remove operations.
      */
+    @Deprecated
     public List<Card> getCardsMutable() {
-        return cards;
+        return new ArrayList<>(cards);
+    }
+
+    /**
+     * Find and remove a card by name from the library.
+     * This is the preferred way to search for and remove a specific card.
+     * @param cardName The name of the card to find
+     * @return The removed card, or null if not found
+     */
+    public Card findAndRemove(String cardName) {
+        Iterator<Card> iter = cards.iterator();
+        while (iter.hasNext()) {
+            Card card = iter.next();
+            if (card.getName().equals(cardName)) {
+                iter.remove();
+                return card;
+            }
+        }
+        return null;
+    }
+
+    /**
+     * Replace the library contents with the given list.
+     * Used after external modifications via getCardsMutable().
+     * @param newCards The new card list
+     */
+    public void replaceWith(List<Card> newCards) {
+        cards = new ArrayDeque<>(newCards);
     }
 }
 

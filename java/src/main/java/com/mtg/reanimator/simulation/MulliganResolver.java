@@ -22,9 +22,13 @@ public final class MulliganResolver {
      * Count the number of lands in a hand.
      */
     public static int countLands(List<Card> hand) {
-        return (int) hand.stream()
-                .filter(c -> c.getCardType() == CardType.LAND)
-                .count();
+        int count = 0;
+        for (int i = 0; i < hand.size(); i++) {
+            if (hand.get(i).getCardType() == CardType.LAND) {
+                count++;
+            }
+        }
+        return count;
     }
 
     /**
@@ -68,12 +72,25 @@ public final class MulliganResolver {
         }
 
         // Check for mill enablers - always keep if we have one with enough lands
-        if (hand.stream().anyMatch(MulliganResolver::isMillEnabler)) {
+        boolean hasMillEnabler = false;
+        for (int i = 0; i < hand.size(); i++) {
+            if (isMillEnabler(hand.get(i))) {
+                hasMillEnabler = true;
+                break;
+            }
+        }
+        if (hasMillEnabler) {
             return lands < 2;
         }
 
         // Check for playable early spells
-        boolean hasEarlySpell = hand.stream().anyMatch(MulliganResolver::isPlayableEarlySpell);
+        boolean hasEarlySpell = false;
+        for (int i = 0; i < hand.size(); i++) {
+            if (isPlayableEarlySpell(hand.get(i))) {
+                hasEarlySpell = true;
+                break;
+            }
+        }
 
         // Keep if we have 2-5 lands and at least one early spell
         if (lands >= 2 && lands <= 5 && hasEarlySpell) {

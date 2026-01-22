@@ -194,6 +194,10 @@ public class Main implements Runnable {
                 description = "Path to cards database")
         String cardsPath;
 
+        @Option(names = {"-w", "--work-stealing"},
+                description = "Use work-stealing pool instead of virtual threads")
+        boolean workStealing;
+
         @Override
         public Integer call() throws Exception {
             // Load card database
@@ -262,8 +266,8 @@ public class Main implements Runnable {
                     continue;
                 }
 
-                // Run games using virtual threads for parallelism
-                List<GameResult> results = runGamesParallel(deck, db, games);
+                // Run games using virtual threads or work-stealing pool for parallelism
+                List<GameResult> results = runGamesParallel(deck, db, games, !workStealing);
 
                 // Calculate statistics
                 List<GameResult> wins = results.stream().filter(GameResult::isWin).toList();
@@ -361,10 +365,13 @@ public class Main implements Runnable {
     record ConfigResult(Map<String, Integer> config, double winRate, double avgWinTurn) {}
 
     /**
-     * Run games in parallel using virtual threads.
+     * Run games in parallel using virtual threads or work-stealing pool.
      */
-    private static List<GameResult> runGamesParallel(List<Card> deck, CardDatabase db, int numGames) {
-        try (var executor = Executors.newVirtualThreadPerTaskExecutor()) {
+    private static List<GameResult> runGamesParallel(List<Card> deck, CardDatabase db, int numGames, boolean useVirtualThreads) {
+        var executor = useVirtualThreads
+            ? Executors.newVirtualThreadPerTaskExecutor()
+            : Executors.newWorkStealingPool();
+        try {
             List<Future<GameResult>> futures = new ArrayList<>();
             for (int j = 0; j < numGames; j++) {
                 final long seed = System.nanoTime() + j;
@@ -381,6 +388,8 @@ public class Main implements Runnable {
                 }
             }
             return results;
+        } finally {
+            executor.close();
         }
     }
 
