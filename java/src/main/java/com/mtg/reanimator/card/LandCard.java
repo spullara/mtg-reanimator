@@ -62,7 +62,7 @@ public class LandCard {
     }
 
     public void setName(String name) {
-        this.name = name;
+        this.name = name != null ? name.intern() : null;
     }
 
     public void setManaValue(int manaValue) {

@@ -42,7 +42,7 @@ public class SpellCard {
     }
 
     public void setName(String name) {
-        this.name = name;
+        this.name = name != null ? name.intern() : null;
     }
 
     public void setManaCost(ManaCost manaCost) {

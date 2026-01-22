@@ -80,8 +80,8 @@ public final class SimulationEngine {
      */
     public static boolean hasArdynOnBattlefield(GameState state) {
         return state.getBattlefield().getPermanents().stream()
-            .anyMatch(p -> p.getName().equals("Ardyn, the Usurper")
-                || "Ardyn, the Usurper".equals(p.getIsCopyOf()));
+            .anyMatch(p -> CardNames.is(p.getName(), CardNames.ARDYN_THE_USURPER)
+                || CardNames.is(p.getIsCopyOf(), CardNames.ARDYN_THE_USURPER));
     }
 
     /**
@@ -320,9 +320,9 @@ public final class SimulationEngine {
             Card card = graveyardCards.get(i);
             if (card instanceof Card.Creature creature) {
                 int priorityBoost = 0;
-                if (creature.getName().equals("Bringer of the Last Gift")) {
+                if (CardNames.is(creature, CardNames.BRINGER_OF_THE_LAST_GIFT)) {
                     priorityBoost = 100;
-                } else if (creature.getName().equals("Terror of the Peaks")) {
+                } else if (CardNames.is(creature, CardNames.TERROR_OF_THE_PEAKS)) {
                     priorityBoost = 50;
                 }
                 int effectivePower = creature.getPower() + priorityBoost;
@@ -361,8 +361,8 @@ public final class SimulationEngine {
 
             // Count Terrors BEFORE adding the token - Terror triggers on "another creature"
             long terrorCount = state.getBattlefield().getPermanents().stream()
-                    .filter(p -> p.getName().equals("Terror of the Peaks")
-                            || "Terror of the Peaks".equals(p.getIsCopyOf()))
+                    .filter(p -> CardNames.is(p.getName(), CardNames.TERROR_OF_THE_PEAKS)
+                            || CardNames.is(p.getIsCopyOf(), CardNames.TERROR_OF_THE_PEAKS))
                     .count();
 
             state.getBattlefield().addPermanent(tokenPerm);

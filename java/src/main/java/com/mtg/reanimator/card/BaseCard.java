@@ -21,7 +21,8 @@ public class BaseCard {
     }
 
     public BaseCard(String name, ManaCost manaCost, int manaValue) {
-        this.name = name;
+        // Intern the string for faster == comparisons and reduced memory
+        this.name = name != null ? name.intern() : null;
         this.manaCost = manaCost != null ? manaCost : new ManaCost();
         this.manaValue = manaValue;
     }
@@ -39,7 +40,8 @@ public class BaseCard {
     }
 
     public void setName(String name) {
-        this.name = name;
+        // Intern the string for faster == comparisons and reduced memory
+        this.name = name != null ? name.intern() : null;
     }
 
     public void setManaCost(ManaCost manaCost) {

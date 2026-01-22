@@ -88,7 +88,7 @@ public class CreatureCard {
     }
 
     // Setters for Jackson
-    public void setName(String name) { this.name = name; }
+    public void setName(String name) { this.name = name != null ? name.intern() : null; }
     public void setManaCost(ManaCost manaCost) { this.manaCost = manaCost; }
     public void setManaValue(int manaValue) { this.manaValue = manaValue; }
     public void setPower(int power) { this.power = power; }
