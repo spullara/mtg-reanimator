@@ -353,7 +353,7 @@ public class CardResolver {
 
         // Process enchantment abilities
         for (String ability : enchantment.getAbilities()) {
-            if (ability == "etb_mill_4_return_artifact_creature_land") {
+            if ("etb_mill_4_return_artifact_creature_land".equals(ability)) {
                 // Dredger's Insight: mill 4, return artifact/creature/land to hand
                 List<Card> milled = state.getLibrary().mill(4);
 
