@@ -1345,44 +1345,110 @@ public class CardResolver {
      * 6. Town Greeter (cheap enabler)
      */
     public static void resolveFormidableSpeakerEtb(GameState state, GameRng rng, boolean verbose) {
-        // First, check if we should discard
         List<Card> hand = state.getHand().getCards();
+        List<Card> graveyard = state.getGraveyard().getCards();
+        List<Card> library = state.getLibrary().getCards();
 
-        // Find a card to discard (prioritize cards we want in graveyard)
-        Card toDiscard = null;
-        for (Card card : hand) {
-            String name = card.getName();
-            if (name.equals("Bringer of the Last Gift") ||
-                name.equals("Terror of the Peaks") ||
-                name.equals("Ardyn, the Usurper")) {
-                toDiscard = card;
-                break;
+        // Gather state
+        boolean hasSpiderMan = hand.stream().anyMatch(c -> c.getName().equals("Superior Spider-Man"));
+        boolean hasBringerInHand = hand.stream().anyMatch(c -> c.getName().equals("Bringer of the Last Gift"));
+        boolean hasTerrorInHand = hand.stream().anyMatch(c -> c.getName().equals("Terror of the Peaks"));
+        boolean hasArdynInHand = hand.stream().anyMatch(c -> c.getName().equals("Ardyn, the Usurper"));
+        boolean hasBringerInGy = graveyard.stream().anyMatch(c -> c.getName().equals("Bringer of the Last Gift"));
+        boolean hasTerrorInGy = graveyard.stream().anyMatch(c -> c.getName().equals("Terror of the Peaks"));
+        boolean hasKioraInHand = hand.stream().anyMatch(c -> c.getName().equals("Kiora, the Rising Tide"));
+        boolean hasOverlordInHand = hand.stream().anyMatch(c -> c.getName().equals("Overlord of the Balemurk"));
+        boolean spiderInLibrary = library.stream().anyMatch(c -> c.getName().equals("Superior Spider-Man"));
+
+        String discardTarget = null;
+        String tutorTarget = null;
+
+        // Priority 1: Discard Bringer/Terror/Ardyn to get Spider-Man
+        if (!hasSpiderMan && spiderInLibrary) {
+            if (hasBringerInHand) {
+                discardTarget = "Bringer of the Last Gift";
+                tutorTarget = "Superior Spider-Man";
+            } else if (hasTerrorInHand) {
+                discardTarget = "Terror of the Peaks";
+                tutorTarget = "Superior Spider-Man";
+            } else if (hasArdynInHand) {
+                discardTarget = "Ardyn, the Usurper";
+                tutorTarget = "Superior Spider-Man";
             }
         }
 
-        // If no reanimation target, try to find any card to discard (except key pieces)
-        if (toDiscard == null) {
-            for (Card card : hand) {
-                String name = card.getName();
-                if (!name.equals("Superior Spider-Man") &&
-                    !name.equals("Kiora, the Rising Tide") &&
-                    !name.equals("Formidable Speaker")) {
-                    // Prefer lands if we have enough
-                    long landCount = state.getBattlefield().getPermanents().stream()
-                            .filter(p -> p.getCard() instanceof Card.Land).count();
-                    if (card instanceof Card.Land && landCount >= 4) {
-                        toDiscard = card;
-                        break;
-                    }
+        // Priority 1.5: If no Spider-Man but Bringer in GY - discard ANY mill creature to get Spider-Man
+        if (tutorTarget == null && !hasSpiderMan && hasBringerInGy && spiderInLibrary) {
+            long kioraCount = hand.stream().filter(c -> c.getName().equals("Kiora, the Rising Tide")).count();
+            long townGreeterCount = hand.stream().filter(c -> c.getName().equals("Town Greeter")).count();
+
+            if (kioraCount > 1) {
+                discardTarget = "Kiora, the Rising Tide";
+                tutorTarget = "Superior Spider-Man";
+            } else if (townGreeterCount > 1) {
+                discardTarget = "Town Greeter";
+                tutorTarget = "Superior Spider-Man";
+            } else if (kioraCount >= 1) {
+                discardTarget = "Kiora, the Rising Tide";
+                tutorTarget = "Superior Spider-Man";
+            } else if (townGreeterCount >= 1) {
+                discardTarget = "Town Greeter";
+                tutorTarget = "Superior Spider-Man";
+            } else if (hasOverlordInHand) {
+                discardTarget = "Overlord of the Balemurk";
+                tutorTarget = "Superior Spider-Man";
+            }
+        }
+
+        // Priority 2: Spider-Man in hand, Bringer not in GY, Bringer in hand -> discard Bringer
+        if (tutorTarget == null && hasSpiderMan && !hasBringerInGy && hasBringerInHand) {
+            discardTarget = "Bringer of the Last Gift";
+            if (!hasTerrorInGy && !hasTerrorInHand) {
+                tutorTarget = "Terror of the Peaks";
+            } else {
+                // Get mill creature instead
+                if (!hasOverlordInHand) {
+                    tutorTarget = "Overlord of the Balemurk";
+                } else if (!hasKioraInHand) {
+                    tutorTarget = "Kiora, the Rising Tide";
+                } else {
+                    tutorTarget = "Superior Spider-Man"; // backup
                 }
             }
         }
 
-        // Still no discard? Try any non-essential card
-        if (toDiscard == null) {
+        // Priority 3: Spider-Man + Bringer in GY but no Terror -> discard land to get Terror
+        if (tutorTarget == null && hasSpiderMan && hasBringerInGy && !hasTerrorInGy && !hasTerrorInHand) {
+            // Find a land to discard
+            boolean hasLandInHand = hand.stream().anyMatch(c -> c instanceof Card.Land);
+            if (hasLandInHand) {
+                discardTarget = "land"; // special marker
+                tutorTarget = "Terror of the Peaks";
+            }
+        }
+
+        // If no valid discard/tutor pair found, decline the ability
+        if (tutorTarget == null) {
+            if (verbose) {
+                System.out.println("    Formidable Speaker ETB: chose not to discard");
+            }
+            return;
+        }
+
+        // Execute discard
+        Card toDiscard = null;
+        if ("land".equals(discardTarget)) {
+            // Find any land
             for (Card card : hand) {
-                String name = card.getName();
-                if (!name.equals("Superior Spider-Man")) {
+                if (card instanceof Card.Land) {
+                    toDiscard = card;
+                    break;
+                }
+            }
+        } else {
+            // Find card by name
+            for (Card card : hand) {
+                if (card.getName().equals(discardTarget)) {
                     toDiscard = card;
                     break;
                 }
@@ -1391,12 +1457,11 @@ public class CardResolver {
 
         if (toDiscard == null) {
             if (verbose) {
-                System.out.println("    Formidable Speaker: No card to discard, skipping tutor");
+                System.out.println("    Formidable Speaker ETB: chose not to discard");
             }
             return;
         }
 
-        // Discard the card
         state.getHand().remove(toDiscard);
         state.getGraveyard().add(toDiscard);
 
@@ -1404,73 +1469,19 @@ public class CardResolver {
             System.out.println("    Formidable Speaker discards: " + toDiscard.getName());
         }
 
-        // Now search for a creature
-        String targetCreature = chooseTutorTarget(state);
-
-        if (targetCreature == null) {
-            if (verbose) {
-                System.out.println("    Formidable Speaker: No creature to search for");
-            }
-            return;
-        }
-
-        // Search library for the creature
-        Card found = findAndRemoveFromLibrary(state.getLibrary(), targetCreature);
+        // Execute tutor
+        Card found = findAndRemoveFromLibrary(state.getLibrary(), tutorTarget);
         if (found != null) {
             state.getHand().add(found);
             if (verbose) {
                 System.out.println("    Formidable Speaker tutors: " + found.getName());
             }
         } else if (verbose) {
-            System.out.println("    Formidable Speaker: " + targetCreature + " not in library");
+            System.out.println("    Formidable Speaker: " + tutorTarget + " not in library");
         }
 
         // Shuffle library
         state.getLibrary().shuffle(rng);
-    }
-
-    /**
-     * Choose tutor target based on game state.
-     */
-    private static String chooseTutorTarget(GameState state) {
-        List<Card> hand = state.getHand().getCards();
-        List<Card> graveyard = state.getGraveyard().getCards();
-
-        boolean hasSpiderInHand = hand.stream().anyMatch(c -> c.getName().equals("Superior Spider-Man"));
-        boolean hasBringerInGy = graveyard.stream().anyMatch(c -> c.getName().equals("Bringer of the Last Gift"));
-        boolean hasBringerInHand = hand.stream().anyMatch(c -> c.getName().equals("Bringer of the Last Gift"));
-        boolean hasKioraInHand = hand.stream().anyMatch(c -> c.getName().equals("Kiora, the Rising Tide"));
-
-        // Priority 1: If we have Spider-Man, get Bringer (for graveyard via discard)
-        if (hasSpiderInHand && !hasBringerInGy && !hasBringerInHand) {
-            return "Bringer of the Last Gift";
-        }
-
-        // Priority 2: If Bringer in graveyard, get Spider-Man
-        if (hasBringerInGy && !hasSpiderInHand) {
-            return "Superior Spider-Man";
-        }
-
-        // Priority 3: Kiora for draw/discard
-        if (!hasKioraInHand) {
-            return "Kiora, the Rising Tide";
-        }
-
-        // Priority 4: Overlord for mill
-        boolean hasOverlordInHand = hand.stream().anyMatch(c -> c.getName().equals("Overlord of the Balemurk"));
-        if (!hasOverlordInHand) {
-            return "Overlord of the Balemurk";
-        }
-
-        // Priority 5: Terror for damage
-        boolean hasTerrorInHand = hand.stream().anyMatch(c -> c.getName().equals("Terror of the Peaks"));
-        boolean hasTerrorInGy = graveyard.stream().anyMatch(c -> c.getName().equals("Terror of the Peaks"));
-        if (!hasTerrorInHand && !hasTerrorInGy) {
-            return "Terror of the Peaks";
-        }
-
-        // Priority 6: Town Greeter
-        return "Town Greeter";
     }
 
     // ===== COMBO DAMAGE CALCULATION =====
