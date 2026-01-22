@@ -86,14 +86,14 @@ public final class TurnManager {
         }
 
         // Second pass: advance counters and collect chapters to resolve
-        // Note: Wave 2 uses LORE counters for sagas, but Rust uses TIME for both
-        // We use LORE to match Wave 2's CounterType enum
+        // Note: We use TIME counters for both sagas (lore) and impending creatures
+        // to match CardResolver's implementation
         List<SagaChapter> sagaChapters = new ArrayList<>();
 
         for (SagaInfo info : sagasToAdvance) {
             Permanent permanent = permanents.get(info.index);
-            permanent.addCounter(CounterType.LORE, 1);
-            int chapter = permanent.getCounter(CounterType.LORE);
+            permanent.addCounter(CounterType.TIME, 1);
+            int chapter = permanent.getCounter(CounterType.TIME);
             sagaChapters.add(new SagaChapter(info.name, chapter));
         }
 
@@ -106,7 +106,7 @@ public final class TurnManager {
         List<Integer> indicesToRemove = new ArrayList<>();
         for (SagaInfo info : sagasToAdvance) {
             Permanent permanent = permanents.get(info.index);
-            int counters = permanent.getCounter(CounterType.LORE);
+            int counters = permanent.getCounter(CounterType.TIME);
             if (counters >= info.maxChapters) {
                 indicesToRemove.add(info.index);
             }

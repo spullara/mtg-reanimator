@@ -854,13 +854,12 @@ public final class SimulationEngine {
                                 System.out.println("  [Cast] " + cardName);
                             }
                         }
-                        // Process ETB triggers for the creature (unless using impending - those aren't creatures yet!)
-                        if (!useImpending) {
-                            List<Permanent> perms = state.getBattlefield().getPermanents();
-                            if (!perms.isEmpty()) {
-                                Permanent lastPerm = perms.get(perms.size() - 1);
-                                CardResolver.processEtbTriggersVerbose(state, lastPerm, db, verbose, rng);
-                            }
+                        // Process ETB triggers for the creature
+                        // Note: ETB triggers fire even when cast for impending (it enters as an enchantment)
+                        List<Permanent> perms = state.getBattlefield().getPermanents();
+                        if (!perms.isEmpty()) {
+                            Permanent lastPerm = perms.get(perms.size() - 1);
+                            CardResolver.processEtbTriggersVerbose(state, lastPerm, db, verbose, rng);
                         }
                     } else {
                         CardResolver.castSpell(state, card, db, verbose, rng);
@@ -887,11 +886,21 @@ public final class SimulationEngine {
 
     /**
      * Check if we can cast a spell given current game state.
-     * Wrapper around ManaUtils.canPayManaCost for convenience.
+     * For creatures with impending, also checks if we can afford the impending cost.
      */
     private static boolean canCastSpell(Card card, GameState state) {
-        ManaCost cost = CardResolver.getCardManaCost(card);
         CreatureCard forCreature = (card instanceof Card.Creature creature) ? creature : null;
+
+        // For creatures with impending, check if we can cast for impending cost
+        if (forCreature != null && forCreature.hasImpending()) {
+            ManaCost impendingCost = forCreature.getImpendingCost();
+            if (impendingCost != null && ManaUtils.canPayManaCost(state.getBattlefield(), impendingCost, forCreature, state.getLife())) {
+                return true;
+            }
+        }
+
+        // Check regular mana cost
+        ManaCost cost = CardResolver.getCardManaCost(card);
         return ManaUtils.canPayManaCost(state.getBattlefield(), cost, forCreature, state.getLife());
     }
 
