@@ -5,12 +5,15 @@ import com.mtg.reanimator.card.CardDatabase;
 import com.mtg.reanimator.card.CardDatabaseException;
 import com.mtg.reanimator.simulation.Deck;
 import com.mtg.reanimator.simulation.GameResult;
+import com.mtg.reanimator.simulation.LandOptimizer;
 import com.mtg.reanimator.simulation.SimulationEngine;
 import picocli.CommandLine;
 import picocli.CommandLine.*;
 
 import java.util.*;
 import java.util.concurrent.Callable;
+import java.util.concurrent.Executors;
+import java.util.concurrent.Future;
 import java.util.stream.IntStream;
 
 /**
@@ -180,27 +183,213 @@ public class Main implements Runnable {
     // ========== OPTIMIZE COMMAND ==========
     @Command(name = "optimize", description = "Optimize land configuration")
     static class OptimizeCommand implements Callable<Integer> {
-        @Option(names = {"-n", "--count"}, defaultValue = "1000",
-                description = "Simulations per configuration")
-        int count;
+        @Option(names = {"-c", "--configs"}, defaultValue = "100",
+                description = "Number of random configurations to test")
+        int configs;
+
+        @Option(names = {"-g", "--games"}, defaultValue = "1000",
+                description = "Number of games per configuration")
+        int games;
 
         @Option(names = {"--strategy"}, defaultValue = "weighted",
                 description = "Strategy: weighted or shuffle")
         String strategy;
 
-        @Option(names = {"-c", "--cards"}, defaultValue = "cards.json",
+        @Option(names = {"-d", "--deck"}, defaultValue = "deck.txt",
+                description = "Base deck file (lands will be replaced)")
+        String deckPath;
+
+        @Option(names = {"--cards"}, defaultValue = "cards.json",
                 description = "Path to cards database")
         String cardsPath;
 
         @Override
         public Integer call() throws Exception {
+            // Load card database
+            CardDatabase db;
+            try {
+                db = CardDatabase.fromFile(cardsPath);
+                System.err.println("✓ Loaded " + db.cardCount() + " cards from " + cardsPath);
+            } catch (CardDatabaseException e) {
+                System.err.println("✗ Failed to load cards: " + e.getMessage());
+                return 1;
+            }
+
+            // Validate strategy
+            String strategyDesc;
+            switch (strategy) {
+                case "weighted" -> strategyDesc = "Random counts for each land type, respecting max limits";
+                case "shuffle" -> strategyDesc = "Pool of max copies shuffled, take first 24";
+                default -> {
+                    System.err.println("Unknown strategy '" + strategy + "'. Use 'weighted' or 'shuffle'.");
+                    return 1;
+                }
+            }
+
+            // Extract fixed cards from deck
+            LandOptimizer.FixedCards fixedCards;
+            try {
+                fixedCards = LandOptimizer.extractFixedCardsFromDeck(deckPath, db);
+            } catch (Exception e) {
+                System.err.println("✗ Failed to extract fixed cards from '" + deckPath + "': " + e.getMessage());
+                return 1;
+            }
+
+            int fixedCardCount = fixedCards.totalCount();
+
             System.out.println("\n=== MTG Land Optimization ===\n");
+            System.out.println("Base deck: " + deckPath);
             System.out.println("Strategy: " + strategy);
-            System.out.println("Simulations per config: " + count);
-            System.out.println();
-            System.out.println("Note: Land optimization not yet implemented in Java port.");
-            System.out.println("Use the Rust version for land optimization.");
+            System.out.println("  - " + strategyDesc + "\n");
+            System.out.println("Testing " + configs + " random land configurations");
+            System.out.println("Running " + games + " games per configuration...\n");
+            System.out.println("Fixed non-land cards: " + fixedCardCount + " cards");
+            System.out.println("Land slots to fill: 24 cards\n");
+
+            // Track optimization state
+            Map<String, Integer> bestConfig = null;
+            double bestAvgTurn = Double.POSITIVE_INFINITY;
+            double bestWinRate = 0.0;
+            Map<Integer, Integer> bestTurnDistribution = new HashMap<>();
+            List<ConfigResult> allResults = new ArrayList<>();
+
+            long startTime = System.currentTimeMillis();
+
+            for (int i = 0; i < configs; i++) {
+                // Generate random land configuration
+                var rng = new com.mtg.reanimator.rng.GameRng(System.nanoTime() + i);
+                Map<String, Integer> config = strategy.equals("shuffle")
+                        ? LandOptimizer.generateRandomLandConfigShuffle(rng)
+                        : LandOptimizer.generateRandomLandConfigWeighted(rng);
+
+                // Build deck from config
+                List<Card> deck;
+                try {
+                    deck = LandOptimizer.buildDeckFromConfig(config, fixedCards, db);
+                } catch (Exception e) {
+                    System.err.println("Failed to build deck: " + e.getMessage());
+                    continue;
+                }
+
+                // Run games using virtual threads for parallelism
+                List<GameResult> results = runGamesParallel(deck, db, games);
+
+                // Calculate statistics
+                List<GameResult> wins = results.stream().filter(GameResult::isWin).toList();
+                double winRate = (double) wins.size() / games;
+                double avgWinTurn = wins.isEmpty() ? 0.0 :
+                        wins.stream().mapToInt(GameResult::winTurn).average().orElse(0.0);
+
+                allResults.add(new ConfigResult(new HashMap<>(config), winRate, avgWinTurn));
+
+                // Track best configuration (by average win turn)
+                if (avgWinTurn > 0.0 && avgWinTurn < bestAvgTurn) {
+                    bestConfig = new HashMap<>(config);
+                    bestAvgTurn = avgWinTurn;
+                    bestWinRate = winRate;
+
+                    // Build turn distribution
+                    bestTurnDistribution.clear();
+                    for (GameResult result : wins) {
+                        if (result.winTurn() != null) {
+                            bestTurnDistribution.merge(result.winTurn(), 1, Integer::sum);
+                        }
+                    }
+
+                    System.out.printf("[%d/%d] New best! Avg turn: %.3f, Win rate: %.1f%%%n",
+                            i + 1, configs, bestAvgTurn, bestWinRate * 100.0);
+                    System.out.println("  Lands: " + LandOptimizer.configToString(config) + "\n");
+                }
+
+                // Progress update every 100 configs (or 10 if testing small)
+                int progressInterval = configs >= 100 ? 100 : 10;
+                if ((i + 1) % progressInterval == 0) {
+                    long elapsed = System.currentTimeMillis() - startTime;
+                    double elapsedSec = elapsed / 1000.0;
+                    double eta = (elapsedSec / (i + 1)) * (configs - i - 1);
+                    System.out.printf("Progress: %d/%d (%.1f%%) - ETA: %.0fs%n",
+                            i + 1, configs, (i + 1) * 100.0 / configs, eta);
+                }
+            }
+
+            long totalTime = System.currentTimeMillis() - startTime;
+
+            System.out.println("\n=== Optimization Complete ===");
+            System.out.printf("Total time: %.1fs%n", totalTime / 1000.0);
+            System.out.println("Configurations tested: " + configs);
+            System.out.println("Games per config: " + games);
+            System.out.println("Total games: " + (configs * games) + "\n");
+
+            System.out.println("=== BEST LAND CONFIGURATION ===");
+            System.out.printf("Average win turn: %.3f%n", bestAvgTurn);
+            System.out.printf("Win rate: %.1f%%%n", bestWinRate * 100.0);
+            System.out.println("\nLand breakdown:");
+            if (bestConfig != null) {
+                bestConfig.entrySet().stream()
+                        .filter(e -> e.getValue() > 0)
+                        .sorted((a, b) -> {
+                            int cmp = Integer.compare(b.getValue(), a.getValue());
+                            return cmp != 0 ? cmp : a.getKey().compareTo(b.getKey());
+                        })
+                        .forEach(e -> System.out.println("  " + e.getValue() + " " + e.getKey()));
+            }
+
+            // Show top 10 configurations
+            System.out.println("\n=== Top 10 Configurations ===");
+            allResults.sort(Comparator.comparingDouble(ConfigResult::avgWinTurn));
+            allResults.stream()
+                    .filter(r -> r.avgWinTurn() > 0)
+                    .limit(10)
+                    .forEach(r -> {
+                        int idx = allResults.indexOf(r) + 1;
+                        System.out.printf("[%d] Avg turn: %.3f, Win rate: %.1f%%%n",
+                                idx, r.avgWinTurn(), r.winRate() * 100.0);
+                        System.out.println("    " + LandOptimizer.configToString(r.config()));
+                    });
+
+            // Save best deck to file
+            if (bestConfig != null) {
+                try {
+                    var saveParams = new LandOptimizer.DeckSaveParams(
+                            bestWinRate, bestAvgTurn, games, strategy,
+                            bestTurnDistribution, fixedCards);
+                    String filename = LandOptimizer.saveDeckToFile(bestConfig, saveParams);
+                    System.out.println("\n✓ Best deck saved to: " + filename);
+                } catch (Exception e) {
+                    System.err.println("Failed to save deck: " + e.getMessage());
+                }
+            }
+
             return 0;
+        }
+    }
+
+    /**
+     * Result of testing a configuration.
+     */
+    record ConfigResult(Map<String, Integer> config, double winRate, double avgWinTurn) {}
+
+    /**
+     * Run games in parallel using virtual threads.
+     */
+    private static List<GameResult> runGamesParallel(List<Card> deck, CardDatabase db, int numGames) {
+        try (var executor = Executors.newVirtualThreadPerTaskExecutor()) {
+            List<Future<GameResult>> futures = new ArrayList<>();
+            for (int j = 0; j < numGames; j++) {
+                final long seed = System.nanoTime() + j;
+                futures.add(executor.submit(() ->
+                        SimulationEngine.runGame(deck, seed, db, false)));
+            }
+
+            List<GameResult> results = new ArrayList<>();
+            for (Future<GameResult> future : futures) {
+                try {
+                    results.add(future.get());
+                } catch (Exception e) {
+                    // Skip failed games
+                }
+            }
+            return results;
         }
     }
 
