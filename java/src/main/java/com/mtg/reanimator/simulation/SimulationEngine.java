@@ -41,6 +41,101 @@ public final class SimulationEngine {
         // Utility class - prevent instantiation
     }
 
+    // ==================== HELPER METHODS ====================
+
+    /**
+     * Check if any card in the list has the given name.
+     * Uses identity comparison since card names are interned.
+     */
+    private static boolean hasCardNamed(List<Card> cards, String name) {
+        for (int i = 0; i < cards.size(); i++) {
+            if (cards.get(i).getName() == name) {
+                return true;
+            }
+        }
+        return false;
+    }
+
+    /**
+     * Count creatures in the list excluding those with the given name.
+     */
+    private static int countCreaturesExcluding(List<Card> cards, String excludeName) {
+        int count = 0;
+        for (int i = 0; i < cards.size(); i++) {
+            Card c = cards.get(i);
+            if (c instanceof Card.Creature && c.getName() != excludeName) {
+                count++;
+            }
+        }
+        return count;
+    }
+
+    /**
+     * Count untapped lands on the battlefield.
+     */
+    private static int countUntappedLands(Battlefield battlefield) {
+        int count = 0;
+        List<Permanent> permanents = battlefield.getPermanents();
+        for (int i = 0; i < permanents.size(); i++) {
+            Permanent p = permanents.get(i);
+            if (p.isLand() && !p.isTapped()) {
+                count++;
+            }
+        }
+        return count;
+    }
+
+    /**
+     * Check if any card has one of the given names.
+     */
+    private static boolean hasAnyCardNamed(List<Card> cards, String name1, String name2) {
+        for (int i = 0; i < cards.size(); i++) {
+            String name = cards.get(i).getName();
+            if (name == name1 || name == name2) {
+                return true;
+            }
+        }
+        return false;
+    }
+
+    /**
+     * Check if graveyard has any mill creature (Overlord, Kiora, or Town Greeter).
+     */
+    private static boolean hasMillCreatureInGraveyard(List<Card> cards) {
+        for (int i = 0; i < cards.size(); i++) {
+            String name = cards.get(i).getName();
+            if (name == "Overlord of the Balemurk" || name == "Kiora, the Rising Tide" || name == "Town Greeter") {
+                return true;
+            }
+        }
+        return false;
+    }
+
+    /**
+     * Count cards with the given name.
+     */
+    private static int countCardsNamed(List<Card> cards, String name) {
+        int count = 0;
+        for (int i = 0; i < cards.size(); i++) {
+            if (cards.get(i).getName() == name) {
+                count++;
+            }
+        }
+        return count;
+    }
+
+    /**
+     * Check if hand has lands.
+     */
+    private static boolean hasLandsInHand(List<Card> cards) {
+        for (int i = 0; i < cards.size(); i++) {
+            if (cards.get(i) instanceof Card.Land) {
+                return true;
+            }
+        }
+        return false;
+    }
+
     // ==================== WIN CONDITION ====================
 
     /**
@@ -581,23 +676,18 @@ public final class SimulationEngine {
         // SPECIAL CASE: Turn 4 combo check
         // If we have Spider-Man in hand, and a valid combo target in GY, and can get to 4 mana by playing a land,
         // play the land FIRST before casting any other spells!
-        boolean hasSpiderMan = handCards.stream().anyMatch(c -> c.getName().equals("Superior Spider-Man"));
-        boolean hasBringerInGy = state.getGraveyard().getCards().stream()
-                .anyMatch(c -> c.getName().equals("Bringer of the Last Gift"));
+        boolean hasSpiderMan = hasCardNamed(handCards, "Superior Spider-Man");
+        List<Card> graveyardCards = state.getGraveyard().getCards();
+        boolean hasBringerInGy = hasCardNamed(graveyardCards, "Bringer of the Last Gift");
 
         // Also check for Ardyn combo path
-        boolean hasArdynInGy = state.getGraveyard().getCards().stream()
-                .anyMatch(c -> c.getName().equals("Ardyn, the Usurper"));
-        long otherCreaturesInGy = state.getGraveyard().getCards().stream()
-                .filter(c -> c instanceof Card.Creature && !c.getName().equals("Ardyn, the Usurper"))
-                .count();
+        boolean hasArdynInGy = hasCardNamed(graveyardCards, "Ardyn, the Usurper");
+        int otherCreaturesInGy = countCreaturesExcluding(graveyardCards, "Ardyn, the Usurper");
         boolean hasArdynCombo = hasArdynInGy && otherCreaturesInGy >= 1;
 
         boolean hasValidComboTarget = hasBringerInGy || hasArdynCombo;
 
-        long currentMana = state.getBattlefield().getPermanents().stream()
-                .filter(p -> p.isLand() && !p.isTapped())
-                .count();
+        int currentMana = countUntappedLands(state.getBattlefield());
 
         if (hasSpiderMan && hasValidComboTarget && currentMana == 3 && !state.isLandPlayedThisTurn()) {
             // Check if we have an untapped land to play
@@ -624,11 +714,19 @@ public final class SimulationEngine {
 
         // STEP 1: Cast land-finding spells if we haven't played a land
         // BUT skip if we have Bringer/Terror in hand and can cast discard spell
-        boolean hasBringerOrTerrorInHand = handCards.stream()
-                .anyMatch(c -> c.getName().equals("Bringer of the Last Gift") || c.getName().equals("Terror of the Peaks"));
+        boolean hasBringerOrTerrorInHand = hasAnyCardNamed(handCards, "Bringer of the Last Gift", "Terror of the Peaks");
 
-        boolean kioraInHand = handCards.stream().anyMatch(c -> c.getName().equals("Kiora, the Rising Tide"));
-        boolean speakerInHand = handCards.stream().anyMatch(c -> c.getName().equals("Formidable Speaker"));
+        // Check for Kiora and Speaker in hand in one loop
+        boolean kioraInHand = false;
+        boolean speakerInHand = false;
+        for (int i = 0; i < handCards.size(); i++) {
+            String name = handCards.get(i).getName();
+            if (name == "Kiora, the Rising Tide") {
+                kioraInHand = true;
+            } else if (name == "Formidable Speaker") {
+                speakerInHand = true;
+            }
+        }
 
         boolean shouldPrioritizeDiscardSpell = hasBringerOrTerrorInHand && (kioraInHand || speakerInHand);
 
@@ -688,11 +786,9 @@ public final class SimulationEngine {
         // STEP 2: Play a land
         if (!state.isLandPlayedThisTurn()) {
             handCards = state.getHand().getCards();
-            List<Card> landsInHand = handCards.stream()
-                    .filter(c -> c instanceof Card.Land)
-                    .toList();
+            boolean hasLands = hasLandsInHand(handCards);
 
-            if (!landsInHand.isEmpty()) {
+            if (hasLands) {
                 OptionalInt landIdxOpt = DecisionEngine.chooseLandToPlay(handCards, state);
                 if (landIdxOpt.isPresent()) {
                     Card landCard = state.getHand().remove(landIdxOpt.getAsInt());
@@ -718,17 +814,27 @@ public final class SimulationEngine {
             castAny = false;
 
             // Get game state for spell priorities
-            boolean hasBringerInGraveyard = state.getGraveyard().getCards().stream()
-                    .anyMatch(c -> c.getName().equals("Bringer of the Last Gift"));
-            boolean hasBringerInHandNow = state.getHand().getCards().stream()
-                    .anyMatch(c -> c.getName().equals("Bringer of the Last Gift"));
-            boolean hasTerrorInHand = state.getHand().getCards().stream()
-                    .anyMatch(c -> c.getName().equals("Terror of the Peaks"));
+            List<Card> currentGraveyardCards = state.getGraveyard().getCards();
+            List<Card> currentHandCards = state.getHand().getCards();
+            boolean hasBringerInGraveyard = hasCardNamed(currentGraveyardCards, "Bringer of the Last Gift");
+
+            // Check for Bringer, Terror, and Spider-Man in hand in one loop
+            boolean hasBringerInHandNow = false;
+            boolean hasTerrorInHand = false;
+            boolean hasSpiderManInHand = false;
+            for (int i = 0; i < currentHandCards.size(); i++) {
+                String name = currentHandCards.get(i).getName();
+                if (name == "Bringer of the Last Gift") {
+                    hasBringerInHandNow = true;
+                } else if (name == "Terror of the Peaks") {
+                    hasTerrorInHand = true;
+                } else if (name == "Superior Spider-Man") {
+                    hasSpiderManInHand = true;
+                }
+            }
 
             // Check if combo would be lethal
             boolean comboIsLethal = hasBringerInGraveyard && CardResolver.isComboLethal(state);
-            boolean hasSpiderManInHand = state.getHand().getCards().stream()
-                    .anyMatch(c -> c.getName().equals("Superior Spider-Man"));
 
             // Log when holding back combo
             if (verbose && hasBringerInGraveyard && hasSpiderManInHand && !comboIsLethal) {
@@ -755,7 +861,7 @@ public final class SimulationEngine {
                 }
 
                 // Spider-Man casting logic
-                if (c.getName().equals("Superior Spider-Man")) {
+                if (c.getName() == "Superior Spider-Man") {
                     if (hasBringerInGraveyard) {
                         // Only cast if combo would be lethal
                         if (!comboIsLethal) {
@@ -763,21 +869,13 @@ public final class SimulationEngine {
                         }
                     } else {
                         // Check for Ardyn combo path
-                        boolean hasArdynInGraveyardNow = state.getGraveyard().getCards().stream()
-                                .anyMatch(card -> card.getName().equals("Ardyn, the Usurper"));
-                        long otherCreatures = state.getGraveyard().getCards().stream()
-                                .filter(card -> card instanceof Card.Creature && !card.getName().equals("Ardyn, the Usurper"))
-                                .count();
+                        boolean hasArdynInGraveyardNow = hasCardNamed(currentGraveyardCards, "Ardyn, the Usurper");
+                        int otherCreatures = countCreaturesExcluding(currentGraveyardCards, "Ardyn, the Usurper");
 
                         if (!(hasArdynInGraveyardNow && otherCreatures >= 1)) {
                             // No Ardyn combo - check if we should dig
-                            long spiderManCount = state.getHand().getCards().stream()
-                                    .filter(card -> card.getName().equals("Superior Spider-Man"))
-                                    .count();
-                            boolean hasMillCreatureInGy = state.getGraveyard().getCards().stream()
-                                    .anyMatch(card -> card.getName().equals("Overlord of the Balemurk")
-                                            || card.getName().equals("Kiora, the Rising Tide")
-                                            || card.getName().equals("Town Greeter"));
+                            int spiderManCount = countCardsNamed(currentHandCards, "Superior Spider-Man");
+                            boolean hasMillCreatureInGy = hasMillCreatureInGraveyard(currentGraveyardCards);
 
                             if (spiderManCount < 2 || !hasMillCreatureInGy) {
                                 continue;
@@ -788,27 +886,28 @@ public final class SimulationEngine {
 
                 // Calculate priority (lower is better)
                 int priority = 1000;
+                String cardName = c.getName();
 
                 // Priority 1: Spider-Man if combo is lethal
-                if (comboIsLethal && c.getName().equals("Superior Spider-Man")) {
+                if (comboIsLethal && cardName == "Superior Spider-Man") {
                     priority = 1;
                 }
                 // Priority 1.5: Formidable Speaker if Bringer in GY but no Spider-Man
-                else if (hasBringerInGraveyard && !hasSpiderManInHand && c.getName().equals("Formidable Speaker")) {
+                else if (hasBringerInGraveyard && !hasSpiderManInHand && cardName == "Formidable Speaker") {
                     priority = 15;
                 }
                 // Priority 2: Kiora or Speaker if Bringer/Terror in hand
-                else if ((hasBringerInHandNow || hasTerrorInHand) && c.getName().equals("Formidable Speaker")) {
+                else if ((hasBringerInHandNow || hasTerrorInHand) && cardName == "Formidable Speaker") {
                     priority = 20;
-                } else if ((hasBringerInHandNow || hasTerrorInHand) && c.getName().equals("Kiora, the Rising Tide")) {
+                } else if ((hasBringerInHandNow || hasTerrorInHand) && cardName == "Kiora, the Rising Tide") {
                     priority = 21;
                 }
                 // Priority 3: Mill spells
-                else if (isMill(c.getName())) {
+                else if (isMill(cardName)) {
                     priority = 30 + c.getManaValue();
                 }
                 // Priority 4: Awaken the Honored Dead
-                else if (c.getName().equals("Awaken the Honored Dead")) {
+                else if (cardName == "Awaken the Honored Dead") {
                     priority = 40;
                 }
                 // Default: by mana value
