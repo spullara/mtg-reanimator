@@ -99,6 +99,21 @@ enum Commands {
         #[arg(short, long)]
         seed: Option<u64>,
     },
+
+    /// Simulate mana production per turn
+    Mana {
+        /// Deck file to use
+        #[arg(short, long, default_value = "deck.txt")]
+        deck: String,
+
+        /// Number of games to simulate
+        #[arg(short, long, default_value = "10000")]
+        num_games: usize,
+
+        /// Number of turns to simulate
+        #[arg(short, long, default_value = "10")]
+        turns: usize,
+    },
 }
 
 fn main() {
@@ -137,6 +152,9 @@ fn main() {
         }
         Some(Commands::Analyze { num_games, deck, seed }) => {
             analyze_turn4_failures(&db, &deck, num_games, seed);
+        }
+        Some(Commands::Mana { deck, num_games, turns }) => {
+            run_mana_sim(&db, &deck, num_games, turns);
         }
         None => {
             // Default: run simulation with CLI args
@@ -615,6 +633,31 @@ fn analyze_turn4_failures(db: &CardDatabase, deck_file: &str, num_games: usize, 
 
     println!("\nTurn 4 combo ready: {:.1}% ({}/{})",
         combo_ready as f64 / num_games as f64 * 100.0, combo_ready, num_games);
+
+    println!("\nCompleted in {:.2?} ({:.0} games/sec)",
+        elapsed, num_games as f64 / elapsed.as_secs_f64());
+}
+
+
+fn run_mana_sim(db: &CardDatabase, deck_file: &str, num_games: usize, max_turns: usize) {
+    use simulation::mana_sim::{run_mana_simulation, print_mana_results};
+
+    let deck = match parse_deck_file(deck_file, db) {
+        Ok(deck) => deck,
+        Err(e) => {
+            eprintln!("✗ Failed to parse deck file '{}': {}", deck_file, e);
+            std::process::exit(1);
+        }
+    };
+
+    let land_count = deck.iter().filter(|c| matches!(c, card::Card::Land(_))).count();
+    let deck_size = deck.len();
+
+    let start = std::time::Instant::now();
+    let results = run_mana_simulation(&deck, num_games, max_turns, db);
+    let elapsed = start.elapsed();
+
+    print_mana_results(&results, deck_file, deck_size, land_count);
 
     println!("\nCompleted in {:.2?} ({:.0} games/sec)",
         elapsed, num_games as f64 / elapsed.as_secs_f64());

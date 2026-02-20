@@ -13,6 +13,9 @@ pub enum DeckError {
 
 /// Parse a deck file and return expanded list of cards
 /// Format: "4 Card Name" per line, supports comments with # or //
+/// Also handles Arena export format:
+///   - Skips "Deck" and "Sideboard" header lines
+///   - Strips set/collector info: "4 Card Name (SET) 123" -> count=4, name="Card Name"
 pub fn parse_deck_file(
     path: &str,
     database: &CardDatabase,
@@ -28,7 +31,12 @@ pub fn parse_deck_file(
             continue;
         }
 
-        // Parse "N Card Name" format
+        // Skip Arena section headers ("Deck", "Sideboard")
+        if trimmed.eq_ignore_ascii_case("deck") || trimmed.eq_ignore_ascii_case("sideboard") {
+            continue;
+        }
+
+        // Parse "N Card Name" or "N Card Name (SET) 123" format
         let parts: Vec<&str> = trimmed.splitn(2, ' ').collect();
         if parts.len() != 2 {
             return Err(DeckError::InvalidFormat {
@@ -38,7 +46,12 @@ pub fn parse_deck_file(
         }
 
         let count_str = parts[0];
-        let card_name = parts[1].trim();
+        let mut card_name = parts[1].trim();
+
+        // Strip Arena set/collector info: "Card Name (SET) 123" -> "Card Name"
+        if let Some(paren_pos) = card_name.find(" (") {
+            card_name = card_name[..paren_pos].trim();
+        }
 
         let count: usize = count_str.parse().map_err(|_| DeckError::InvalidFormat {
             line: line_num + 1,

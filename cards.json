@@ -381,5 +381,182 @@
       "gives_demons_lifelink",
       "starscourge"
     ]
+  },
+  {
+    "name": "Llanowar Elves",
+    "card_type": "creature",
+    "mana_cost": {
+      "green": 1
+    },
+    "mana_value": 1,
+    "power": 1,
+    "toughness": 1,
+    "creature_types": [
+      "Elf",
+      "Druid"
+    ],
+    "abilities": [
+      "tap_for_green"
+    ]
+  },
+  {
+    "name": "Badgermole Cub",
+    "card_type": "creature",
+    "mana_cost": {
+      "green": 1,
+      "generic": 1
+    },
+    "mana_value": 2,
+    "power": 2,
+    "toughness": 2,
+    "creature_types": [
+      "Badger",
+      "Mole"
+    ],
+    "abilities": [
+      "etb_earthbend_1",
+      "creature_mana_tap_bonus_green"
+    ]
+  },
+  {
+    "name": "Gene Pollinator",
+    "card_type": "creature",
+    "mana_cost": {
+      "green": 1
+    },
+    "mana_value": 1,
+    "power": 1,
+    "toughness": 2,
+    "creature_types": [
+      "Robot",
+      "Insect"
+    ],
+    "abilities": [
+      "tap_plus_permanent_for_any_color"
+    ]
+  },
+  {
+    "name": "Ouroboroid",
+    "card_type": "creature",
+    "mana_cost": {
+      "green": 2,
+      "generic": 2
+    },
+    "mana_value": 4,
+    "power": 1,
+    "toughness": 3,
+    "creature_types": [
+      "Plant",
+      "Wurm"
+    ],
+    "abilities": [
+      "combat_counters"
+    ]
+  },
+  {
+    "name": "Earthbender Ascension",
+    "card_type": "enchantment",
+    "mana_cost": {
+      "green": 1,
+      "generic": 2
+    },
+    "mana_value": 3,
+    "abilities": [
+      "etb_earthbend_2",
+      "etb_search_basic_land_tapped"
+    ]
+  },
+  {
+    "name": "Ba Sing Se",
+    "card_type": "land",
+    "mana_value": 0,
+    "subtype": "utility",
+    "enters_tapped": true,
+    "colors": [
+      "G"
+    ]
+  },
+  {
+    "name": "Craterhoof Behemoth",
+    "card_type": "creature",
+    "mana_cost": {
+      "green": 3,
+      "generic": 5
+    },
+    "mana_value": 8,
+    "power": 5,
+    "toughness": 5,
+    "creature_types": [
+      "Beast"
+    ],
+    "abilities": [
+      "haste",
+      "etb_pump_all"
+    ]
+  },
+  {
+    "name": "Frenzied Baloth",
+    "card_type": "creature",
+    "mana_cost": {
+      "green": 2
+    },
+    "mana_value": 2,
+    "power": 3,
+    "toughness": 2,
+    "creature_types": [
+      "Beast"
+    ],
+    "abilities": [
+      "cant_be_countered",
+      "trample",
+      "haste"
+    ]
+  },
+  {
+    "name": "Keen-Eyed Curator",
+    "card_type": "creature",
+    "mana_cost": {
+      "green": 2
+    },
+    "mana_value": 2,
+    "power": 3,
+    "toughness": 3,
+    "creature_types": [
+      "Raccoon",
+      "Scout"
+    ],
+    "abilities": [
+      "exile_from_graveyard"
+    ]
+  },
+  {
+    "name": "Pawpatch Recruit",
+    "card_type": "creature",
+    "mana_cost": {
+      "green": 1
+    },
+    "mana_value": 1,
+    "power": 2,
+    "toughness": 1,
+    "creature_types": [
+      "Rabbit",
+      "Warrior"
+    ],
+    "abilities": [
+      "offspring",
+      "trample"
+    ]
+  },
+  {
+    "name": "Overprotect",
+    "card_type": "instant",
+    "mana_cost": {
+      "green": 1,
+      "generic": 1
+    },
+    "mana_value": 2,
+    "abilities": [
+      "pump_spell"
+    ]
   }
 ]
