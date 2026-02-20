@@ -61,7 +61,7 @@ fn count_available_mana(battlefield: &[Permanent]) -> usize {
         .count();
     let mut creatures_tap: usize = 0;
     for p in battlefield {
-        if p.is_land { total += 1; if p.is_earthbent { creatures_tap += 1; } }
+        if p.is_land && !p.is_tapped { total += 1; if p.is_earthbent { creatures_tap += 1; } }
     }
     for p in battlefield {
         if !p.is_land && p.is_creature && !p.has_summoning_sickness
@@ -226,6 +226,28 @@ fn run_mana_game(deck: &[Card], seed: u64, db: &CardDatabase, max_turns: usize) 
     let deck_land_count = deck.iter().filter(|c| matches!(c, Card::Land(_))).count();
     let hand_cards = bo1_opening_hand(&mut library, &mut rng, deck_land_count, deck.len());
     let mut hand: Vec<Card> = hand_cards;
+
+    // Mulligan logic: check for unkeepable hands
+    let land_count = hand.iter().filter(|c| matches!(c, Card::Land(_))).count();
+    let has_mana_dork = hand.iter().any(|c| {
+        if let Card::Creature(cr) = c {
+            cr.abilities.iter().any(|a| a == "tap_for_green" || a == "tap_plus_permanent_for_any_color")
+        } else {
+            false
+        }
+    });
+    let should_mulligan = land_count == 0 || (land_count == 1 && !has_mana_dork);
+    if should_mulligan {
+        // Put hand back into library, shuffle, draw 6
+        library.extend(hand.drain(..));
+        rng.shuffle(&mut library);
+        for _ in 0..6 {
+            if let Some(card) = library.pop() {
+                hand.push(card);
+            }
+        }
+    }
+
     let mut bf: Vec<Permanent> = Vec::new();
     let mut turn_mana = Vec::with_capacity(max_turns);
     let mut turn_creatures = Vec::with_capacity(max_turns);
@@ -243,7 +265,9 @@ fn run_mana_game(deck: &[Card], seed: u64, db: &CardDatabase, max_turns: usize) 
         }
         // Play a land
         play_land_from_hand(&mut hand, &mut bf);
-        // Play mana-producing spells
+        // Record mana available THIS turn (before spending)
+        let mana = count_available_mana(&bf);
+        // Play mana-producing spells (advances game state for future turns)
         play_spells(&mut hand, &mut bf, &mut library, db);
         // Track turn-1 mana dork
         if turn == 1 {
@@ -253,7 +277,6 @@ fn run_mana_game(deck: &[Card], seed: u64, db: &CardDatabase, max_turns: usize) 
             });
         }
         // Record stats
-        let mana = count_available_mana(&bf);
         let creatures = bf.iter().filter(|p| p.is_creature && !p.is_land).count();
         let lands = bf.iter().filter(|p| p.is_land).count();
         turn_mana.push(mana);
@@ -300,7 +323,7 @@ fn percentile(sorted: &[usize], pct: f64) -> usize {
 pub fn print_mana_results(results: &ManaSimResults, deck_file: &str, deck_size: usize, land_count: usize) {
     println!("\n=== Mana Production Simulation ===");
     println!("Deck: {} ({} cards, {} lands)", deck_file, deck_size, land_count);
-    println!("Games: {} | Turns: {} | Hand: Bo1 smoothing\n", results.num_games, results.max_turns);
+    println!("Games: {} | Turns: {} | Hand: Bo1 smoothing + mull\n", results.num_games, results.max_turns);
     println!("{:<6} {:>8} {:>8} {:>6} {:>6} {:>6} {:>6} {:>8} {:>8}",
         "Turn", "AvgMana", "Median", "P25", "P75", "P90", "Max", "AvgLand", "AvgCrt");
     println!("{}", "-".repeat(76));
