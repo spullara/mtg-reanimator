@@ -1,0 +1,14 @@
+# Land pool for deck_latest.txt (2026-11-04 list, U/B, no red)
+# Format: <count-min> <count-max> <Land name>
+# Cavern of Souls (3) and Pit of Offerings (1) are fixed by user choice:
+# their real value is not in the model, so the optimizer must not cut them.
+0 4 Watery Grave
+0 4 Undercity Sewers
+0 4 Gloomlake Verge
+0 4 Shipwreck Marsh
+0 4 Multiversal Passage
+0 4 Starting Town
+0 8 Swamp
+0 4 Island
+3 3 Cavern of Souls
+1 1 Pit of Offerings

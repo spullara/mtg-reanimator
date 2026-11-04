@@ -140,6 +140,36 @@ impl Default for ManaPool {
 /// Get the colors a land can tap for as bitflags (no allocations)
 /// Handles special lands like Cavern of Souls, Verge lands, Starting Town
 #[inline]
+/// Basic land types of a permanent, as color letters: Island = U, Swamp = B,
+/// Mountain = R, Forest = G. Multiversal Passage has the type it chose as it
+/// entered. Used by the Verge conditions ("if you control an Island or a Swamp").
+pub fn basic_land_types(permanent: &Permanent) -> &'static [char] {
+    let Card::Land(land) = &permanent.card else { return &[] };
+    match land.base.name.as_str() {
+        "Island" => &['U'],
+        "Swamp" => &['B'],
+        "Mountain" => &['R'],
+        "Forest" => &['G'],
+        "Watery Grave" | "Undercity Sewers" => &['U', 'B'],
+        "Underground Mortuary" => &['B', 'G'],
+        "Blood Crypt" => &['B', 'R'],
+        "Multiversal Passage" => match permanent.chosen_basic_type.as_deref() {
+            Some("U") => &['U'],
+            Some("B") => &['B'],
+            Some("R") => &['R'],
+            Some("G") => &['G'],
+            _ => &[],
+        },
+        _ => &[],
+    }
+}
+
+/// True if you control a land with one of the given basic land types.
+fn controls_basic_type(state: &GameState, types: &[char]) -> bool {
+    state.battlefield.permanents().iter()
+        .any(|p| basic_land_types(p).iter().any(|t| types.contains(t)))
+}
+
 pub fn can_tap_for_mana(
     permanent: &Permanent,
     state: &GameState,
@@ -173,24 +203,7 @@ pub fn can_tap_for_mana(
 
     // Handle Wastewood Verge - {B} only if controlling Swamp/Forest
     if land.base.name == "Wastewood Verge" {
-        let has_swamp_or_forest = state
-            .battlefield
-            .permanents()
-            .iter()
-            .any(|p| {
-                if let Card::Land(l) = &p.card {
-                    matches!(
-                        l.base.name.as_str(),
-                        "Swamp"
-                            | "Forest"
-                            | "Watery Grave"
-                            | "Underground Mortuary"
-                            | "Undercity Sewers"
-                    )
-                } else {
-                    false
-                }
-            });
+        let has_swamp_or_forest = controls_basic_type(state, &['B', 'G']);
         if has_swamp_or_forest {
             return ColorFlags(ColorFlags::GREEN | ColorFlags::BLACK);
         }
@@ -199,20 +212,7 @@ pub fn can_tap_for_mana(
 
     // Handle Gloomlake Verge - {B} only if controlling Island/Swamp
     if land.base.name == "Gloomlake Verge" {
-        let has_island_or_swamp = state
-            .battlefield
-            .permanents()
-            .iter()
-            .any(|p| {
-                if let Card::Land(l) = &p.card {
-                    matches!(
-                        l.base.name.as_str(),
-                        "Island" | "Swamp" | "Watery Grave" | "Undercity Sewers"
-                    )
-                } else {
-                    false
-                }
-            });
+        let has_island_or_swamp = controls_basic_type(state, &['U', 'B']);
         if has_island_or_swamp {
             return ColorFlags(ColorFlags::BLUE | ColorFlags::BLACK);
         }
@@ -221,25 +221,7 @@ pub fn can_tap_for_mana(
 
     // Handle Blazemire Verge - {R} only if controlling Swamp/Mountain
     if land.base.name == "Blazemire Verge" {
-        let has_swamp_or_mountain = state
-            .battlefield
-            .permanents()
-            .iter()
-            .any(|p| {
-                if let Card::Land(l) = &p.card {
-                    matches!(
-                        l.base.name.as_str(),
-                        "Swamp"
-                            | "Mountain"
-                            | "Blood Crypt"
-                            | "Watery Grave"
-                            | "Undercity Sewers"
-                            | "Underground Mortuary"
-                    )
-                } else {
-                    false
-                }
-            });
+        let has_swamp_or_mountain = controls_basic_type(state, &['B', 'R']);
         if has_swamp_or_mountain {
             return ColorFlags(ColorFlags::BLACK | ColorFlags::RED);
         }

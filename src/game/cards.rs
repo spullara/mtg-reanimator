@@ -1,4 +1,4 @@
-use crate::card::{Card, CardDatabase, CardType, LandSubtype, ManaColor, ManaCost};
+use crate::card::{Card, CardDatabase, CardType, LandSubtype, ManaCost};
 use crate::game::state::GameState;
 use crate::game::zones::{CounterType, Permanent};
 use crate::simulation::decisions::DecisionEngine;
@@ -203,74 +203,67 @@ fn card_mana_cost(card: &Card) -> &ManaCost {
     }
 }
 
-/// Choose basic land type for Multiversal Passage
-/// Priority: Fill missing colors for castable spells
+/// Choose basic land type for Multiversal Passage.
+/// Uses the mana the lands can really make (not their printed color lists) and
+/// only the spells in hand that you could cast soon, so a Terror of the Peaks
+/// that waits to be discarded does not turn Passage into a Mountain.
 fn choose_passage_color(state: &GameState) -> String {
-    // Check what colors we currently have access to from untapped lands
-    let mut has_blue = false;
-    let mut has_black = false;
-    let mut has_green = false;
-    let mut has_red = false;
+    let lands: Vec<&Permanent> = state.battlefield.permanents().iter()
+        .filter(|p| matches!(p.card, Card::Land(_)))
+        .collect();
 
-    for perm in state.battlefield.permanents() {
-        if perm.tapped {
+    // Real sources of each color among the lands on the battlefield
+    let (mut u_src, mut b_src, mut g_src, mut r_src) = (0u32, 0u32, 0u32, 0u32);
+    for perm in &lands {
+        let mut p = (*perm).clone();
+        p.tapped = false;
+        let f = crate::game::mana::can_tap_for_mana(&p, state, None);
+        if f.has_blue() { u_src += 1; }
+        if f.has_black() { b_src += 1; }
+        if f.has_green() { g_src += 1; }
+        if f.has_red() { r_src += 1; }
+    }
+
+    // Colored pips of the spells you could cast soon (mana value at most the
+    // land count after this land drop plus one)
+    let soon = lands.len() as u32 + 2;
+    let (mut u_need, mut b_need, mut g_need, mut r_need) = (0u32, 0u32, 0u32, 0u32);
+    for card in state.hand.cards() {
+        if matches!(card, Card::Land(_)) || card.mana_value() > soon {
             continue;
         }
-        if let Card::Land(land) = &perm.card {
-            for color in &land.colors {
-                match color {
-                    ManaColor::Blue => has_blue = true,
-                    ManaColor::Black => has_black = true,
-                    ManaColor::Green => has_green = true,
-                    ManaColor::Red => has_red = true,
-                    _ => {}
-                }
-            }
-        }
-    }
-
-    // Check what colors we need for spells in hand
-    let mut needs_blue = false;
-    let mut needs_black = false;
-    let mut needs_green = false;
-    let mut needs_red = false;
-
-    for card in state.hand.cards() {
         let cost = card_mana_cost(card);
-        if cost.blue > 0 {
-            needs_blue = true;
-        }
-        if cost.black > 0 {
-            needs_black = true;
-        }
-        if cost.green > 0 {
-            needs_green = true;
-        }
-        if cost.red > 0 {
-            needs_red = true;
-        }
+        u_need = u_need.max(cost.blue as u32);
+        b_need = b_need.max(cost.black as u32);
+        g_need = g_need.max(cost.green as u32);
+        r_need = r_need.max(cost.red as u32);
     }
 
-    // Priority: Fill missing colors for castable spells
-    if needs_green && !has_green {
-        return "G".to_string();
-    } else if needs_blue && !has_blue {
-        return "U".to_string();
-    } else if needs_black && !has_black {
+    // 1. A color that a spell needs and no land makes
+    if g_need > 0 && g_src == 0 { return "G".to_string(); }
+    if u_need > 0 && u_src == 0 { return "U".to_string(); }
+    if b_need > 0 && b_src == 0 { return "B".to_string(); }
+    if r_need > 0 && r_src == 0 { return "R".to_string(); }
+
+    // 2. Turn on Gloomlake Verge's {B}: be a Swamp if a Gloomlake is on the
+    //    battlefield or in hand and no Island or Swamp is on the battlefield
+    let gloomlake = lands.iter().any(|p| p.card.name() == "Gloomlake Verge")
+        || state.hand.cards().iter().any(|c| c.name() == "Gloomlake Verge");
+    let has_island_or_swamp = lands.iter()
+        .any(|p| crate::game::mana::basic_land_types(p).iter().any(|t| *t == 'U' || *t == 'B'));
+    if gloomlake && !has_island_or_swamp {
         return "B".to_string();
-    } else if needs_red && !has_red {
-        return "R".to_string();
-    } else if !has_blue {
-        // Default: prioritize blue for Spider-Man and Kiora
-        return "U".to_string();
-    } else if !has_black {
-        return "B".to_string();
-    } else if !has_green {
-        return "G".to_string();
     }
 
-    // Fallback
-    "U".to_string()
+    // 3. The color with the biggest shortfall (pips needed minus sources)
+    let u_gap = u_need as i64 - u_src as i64;
+    let b_gap = b_need as i64 - b_src as i64;
+    if u_gap > 0 || b_gap > 0 {
+        return if u_gap > b_gap { "U".to_string() } else { "B".to_string() };
+    }
+
+    // 4. No shortfall: balance U and B sources (black first: Beseech needs BBB)
+    if u_src < b_src { "U".to_string() } else { "B".to_string() }
 }
 
 /// Cast a creature, handling impending logic
@@ -2760,6 +2753,46 @@ mod new_card_tests {
 
     fn load_db() -> CardDatabase {
         CardDatabase::from_file("cards.json").expect("Failed to load cards")
+    }
+
+    #[test]
+    fn test_gloomlake_verge_counts_passage_as_swamp() {
+        let db = load_db();
+        let mut state = GameState::new();
+        let gloomlake = Permanent::new(db.get_card("Gloomlake Verge").expect("Gloomlake"), 1);
+        state.battlefield.add_permanent(gloomlake.clone());
+
+        // Alone: only {U}
+        let f = crate::game::mana::can_tap_for_mana(&gloomlake, &state, None);
+        assert!(f.has_blue() && !f.has_black());
+
+        // With a Multiversal Passage that chose Swamp: {U} or {B}
+        let mut passage = Permanent::new(db.get_card("Multiversal Passage").expect("Passage"), 1);
+        passage.chosen_basic_type = Some("B".to_string());
+        state.battlefield.add_permanent(passage);
+        let f = crate::game::mana::can_tap_for_mana(&gloomlake, &state, None);
+        assert!(f.has_blue() && f.has_black(), "Passage set to Swamp turns on Gloomlake's B");
+    }
+
+    #[test]
+    fn test_passage_ignores_terror_red_and_printed_colors() {
+        let db = load_db();
+        let mut state = GameState::new();
+        // Starting Town lists every color, and Terror of the Peaks ({3}{R}{R}) is
+        // in hand. Before the fix, Passage became a Mountain.
+        state.battlefield.add_permanent(Permanent::new(db.get_card("Starting Town").expect("Town"), 1));
+        state.hand.add_card(db.get_card("Terror of the Peaks").expect("Terror"));
+        state.hand.add_card(db.get_card("Superior Spider-Man").expect("Spidey"));
+        let choice = choose_passage_color(&state);
+        assert!(choice == "U" || choice == "B", "chose {}", choice);
+    }
+
+    #[test]
+    fn test_passage_turns_on_gloomlake() {
+        let db = load_db();
+        let mut state = GameState::new();
+        state.battlefield.add_permanent(Permanent::new(db.get_card("Gloomlake Verge").expect("Gloomlake"), 1));
+        assert_eq!(choose_passage_color(&state), "B");
     }
 
     #[test]

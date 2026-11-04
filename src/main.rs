@@ -101,6 +101,13 @@ enum Commands {
         /// configuration.
         #[arg(short, long, default_value = "24")]
         land_counts: String,
+
+        /// Limit the spells that 23/25 land counts may add or cut. Repeat the
+        /// flag for more than one card (card names can contain commas), for
+        /// example `--spell Deceit`. Without this flag, every eligible spell
+        /// is tried.
+        #[arg(long = "spell")]
+        spells: Vec<String>,
     },
 
     /// Analyze turn 4 combo failure reasons
@@ -165,8 +172,8 @@ fn main() {
         }) => {
             compare_decks(&db, &deck1, &deck2, num_games);
         }
-        Some(Commands::Optimize { configs, games, deck, pool, seed, out, land_counts }) => {
-            optimize_lands(&db, configs, games, &deck, pool.as_deref(), seed, out, &land_counts);
+        Some(Commands::Optimize { configs, games, deck, pool, seed, out, land_counts, spells }) => {
+            optimize_lands(&db, configs, games, &deck, pool.as_deref(), seed, out, &land_counts, &spells);
         }
         Some(Commands::Analyze { num_games, deck, seed }) => {
             analyze_turn4_failures(&db, &deck, num_games, seed);
@@ -444,6 +451,7 @@ fn optimize_lands(
     base_seed: u64,
     out_arg: Option<String>,
     land_counts_arg: &str,
+    spell_filter: &[String],
 ) {
     use simulation::optimize::{
         default_land_types, parse_pool_file, validate_pool_total, generate_random_land_config,
@@ -746,14 +754,15 @@ fn optimize_lands(
 
         // Spell candidates
         let cutting = count > DEFAULT_TOTAL_LANDS;
+        let allowed = |name: &str| spell_filter.is_empty() || spell_filter.iter().any(|s| s == name);
         let candidates: Vec<String> = if cutting {
             base_fixed.iter()
-                .filter(|(name, n)| *n >= 2 && !NEVER_CUT.contains(&name.as_str()))
+                .filter(|(name, n)| *n >= 2 && !NEVER_CUT.contains(&name.as_str()) && allowed(name))
                 .map(|(name, _)| name.clone())
                 .collect()
         } else {
             base_fixed.iter()
-                .filter(|(_, n)| *n < 4)
+                .filter(|(name, n)| *n < 4 && allowed(name))
                 .map(|(name, _)| name.clone())
                 .collect()
         };
