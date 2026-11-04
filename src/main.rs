@@ -292,6 +292,17 @@ fn run_simulation(db: &CardDatabase, deck_file: &str, num_games: usize, seed: Op
         avg_first_pay_turn,
         can_pay.len() as f64 / num_games as f64 * 100.0
     );
+    let combo_of = |f: &dyn Fn(&simulation::analyze::ComboCheck) -> bool| results.iter()
+        .filter(|r| r.turn4_mana.as_ref().map_or(false, |m| f(&m.combo)))
+        .count();
+    println!();
+    print_combo_pieces(
+        combo_of(&|c| c.pieces_ready),
+        combo_of(&|c| c.castable),
+        combo_of(&|c| c.blocked == Some(simulation::analyze::ComboBlock::TooFewMana)),
+        combo_of(&|c| c.blocked == Some(simulation::analyze::ComboBlock::WrongColors)),
+        num_games,
+    );
     println!();
 
     println!("Turn distribution:");
@@ -821,6 +832,17 @@ fn optimize_lands(
         println!("    {}", config_to_string(config));
     }
 }
+/// Print the combo-pieces-on-turn-4 lines (shared by `run` and `analyze`)
+fn print_combo_pieces(ready: usize, castable: usize, too_few: usize, wrong: usize, num_games: usize) {
+    let pct = |x: usize, of: usize| if of > 0 { x as f64 / of as f64 * 100.0 } else { 0.0 };
+    let blocked = too_few + wrong;
+    println!("Combo pieces ready on turn 4: {:.1}% of games", pct(ready, num_games));
+    println!("  castable:     {:5.1}% of ready ({:.1}% of games)", pct(castable, ready), pct(castable, num_games));
+    println!("  NOT castable: {:5.1}% of ready ({:.1}% of games)", pct(blocked, ready), pct(blocked, num_games));
+    println!("    fewer than 4 mana: {:5.1}% of ready", pct(too_few, ready));
+    println!("    wrong colors:      {:5.1}% of ready", pct(wrong, ready));
+}
+
 fn analyze_turn4_failures(db: &CardDatabase, deck_file: &str, num_games: usize, seed: Option<u64>) {
     use simulation::analyze::{run_game_to_turn4, aggregate_results, FailureReason};
 
@@ -881,6 +903,15 @@ fn analyze_turn4_failures(db: &CardDatabase, deck_file: &str, num_games: usize, 
         println!("  {:42} {:5.1}% {} ({})",
             format!("{}", reason), pct, bar, count);
     }
+
+    println!("\n--- Combo pieces on turn 4 ---\n");
+    print_combo_pieces(
+        results.pieces_ready_games,
+        results.pieces_castable_games,
+        results.pieces_too_few_mana_games,
+        results.pieces_wrong_colors_games,
+        num_games,
+    );
 
     println!("\n--- Statistics ---\n");
     println!("Average mana on turn 4 (after land drop): {:.2}", results.avg_mana);

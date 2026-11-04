@@ -44,12 +44,13 @@ impl fmt::Display for WrongManaKind {
 /// Reasons why the combo couldn't execute on turn 4
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum FailureReason {
-    // Primary blockers (mutually exclusive - pick the first that applies)
-    InsufficientMana,            // Less than 4 total mana after the land drop
-    WrongMana(WrongManaKind),    // 4+ mana but cannot pay {2}{U}{B}
-    SpiderManNotInHand,          // Spider-Man not in hand
-    NoBringerInGraveyard,        // No Bringer in graveyard to copy
-    InsufficientDamage,          // Have all pieces but two-turn damage < opponent life
+    // Primary blockers (mutually exclusive - pick the first that applies).
+    // Combo pieces are checked first, then whether the mana can cast them.
+    SpiderManNotAvailable,       // No Spider-Man in hand, and no Beseech that can fetch it
+    NoTargetInGraveyard,         // No Bringer (or Ardyn + another creature) in the graveyard
+    PiecesReadyTooFewMana,       // Pieces ready, fewer than 4 untapped mana
+    PiecesReadyWrongColors,      // Pieces ready, 4+ mana, but the colors cannot cast it
+    InsufficientDamage,          // Castable, but two-turn damage < opponent life
 
     // Success case
     ComboAvailable,              // Combo could have fired on turn 4
@@ -58,10 +59,10 @@ pub enum FailureReason {
 impl fmt::Display for FailureReason {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
-            Self::InsufficientMana => write!(f, "Insufficient mana (<4)"),
-            Self::WrongMana(kind) => write!(f, "Wrong mana ({})", kind),
-            Self::SpiderManNotInHand => write!(f, "Spider-Man not in hand"),
-            Self::NoBringerInGraveyard => write!(f, "No Bringer in graveyard"),
+            Self::SpiderManNotAvailable => write!(f, "No Spider-Man (or Beseech for it)"),
+            Self::NoTargetInGraveyard => write!(f, "No combo target in graveyard"),
+            Self::PiecesReadyTooFewMana => write!(f, "Pieces ready, fewer than 4 mana"),
+            Self::PiecesReadyWrongColors => write!(f, "Pieces ready, wrong colors"),
             Self::InsufficientDamage => write!(f, "Insufficient damage"),
             Self::ComboAvailable => write!(f, "✓ Combo available"),
         }
@@ -87,17 +88,80 @@ pub struct ManaCheck {
     pub color_locked: Vec<String>,
 }
 
+/// Why ready combo pieces could not be cast
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub enum ComboBlock {
+    TooFewMana,
+    WrongColors,
+}
+
+/// Combo pieces at a main-phase check point (after the land drop, before any
+/// mana is spent)
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub struct ComboCheck {
+    /// A combo target is in the graveyard (Bringer, or Ardyn + another
+    /// creature) AND Spider-Man is in hand or a Beseech can fetch and
+    /// free-cast it (Beseech in hand, bargain fodder, Spider-Man in library)
+    pub pieces_ready: bool,
+    /// Pieces ready and the mana can cast Spider-Man (or the Beseech)
+    pub castable: bool,
+    /// Pieces ready but not castable: why
+    pub blocked: Option<ComboBlock>,
+}
+
+/// Check the combo pieces and whether the mana can cast them right now.
+pub fn check_combo(state: &GameState) -> ComboCheck {
+    let in_hand = |name: &str| state.hand.cards().iter().find(|c| c.name() == name);
+    let gy = state.graveyard.cards();
+    let bringer_in_gy = gy.iter().any(|c| c.name() == "Bringer of the Last Gift");
+    let ardyn_in_gy = gy.iter().any(|c| c.name() == "Ardyn, the Usurper");
+    let other_creature_in_gy = gy.iter()
+        .any(|c| matches!(c, Card::Creature(_)) && c.name() != "Ardyn, the Usurper");
+    let target_in_gy = bringer_in_gy || (ardyn_in_gy && other_creature_in_gy);
+
+    let spidey = in_hand("Superior Spider-Man");
+    let beseech = in_hand("Beseech the Mirror").filter(|_| {
+        crate::game::cards::beseech_bargain_fodder(state).is_some()
+            && state.library.cards().iter().any(|c| c.name() == "Superior Spider-Man")
+    });
+    let pieces_ready = target_in_gy && (spidey.is_some() || beseech.is_some());
+    if !pieces_ready {
+        return ComboCheck::default();
+    }
+    let castable = spidey.map_or(false, |c| mana::can_cast_spell(c, state))
+        || beseech.map_or(false, |c| mana::can_cast_spell(c, state));
+    let untapped = state.battlefield.permanents().iter()
+        .filter(|p| matches!(p.card, Card::Land(_)) && !p.tapped)
+        .count();
+    let blocked = if castable {
+        None
+    } else if untapped < 4 {
+        Some(ComboBlock::TooFewMana)
+    } else {
+        Some(ComboBlock::WrongColors)
+    };
+    ComboCheck { pieces_ready, castable, blocked }
+}
+
 /// Results from analyzing a single game at turn 4
 #[derive(Debug, Clone)]
 pub struct Turn4Analysis {
     pub primary_failure: FailureReason,
     pub mana: ManaCheck,
+    pub combo: ComboCheck,
 }
 
 /// Aggregate results from analyzing many games
 #[derive(Debug, Default)]
 pub struct AnalysisResults {
     pub failure_counts: HashMap<FailureReason, usize>,
+    /// Games with the combo pieces ready at the turn 4 check point
+    pub pieces_ready_games: usize,
+    /// ...of those, games where the mana could cast it
+    pub pieces_castable_games: usize,
+    /// ...of those, games blocked by too few mana / wrong colors
+    pub pieces_too_few_mana_games: usize,
+    pub pieces_wrong_colors_games: usize,
     pub avg_mana: f64,
     /// % of games with U / B available at the check point
     pub color_availability: (f64, f64),
@@ -210,23 +274,24 @@ pub fn check_mana(state: &GameState, db: &CardDatabase) -> ManaCheck {
 pub fn analyze_turn4_state(state: &GameState, db: &CardDatabase) -> Turn4Analysis {
     let mana = check_mana(state, db);
 
-    let spider_man_in_hand = state.hand.cards().iter()
-        .any(|c| c.name() == "Superior Spider-Man");
-    let bringer_in_graveyard = state.graveyard.cards().iter()
-        .any(|c| c.name() == "Bringer of the Last Gift");
+    let combo = check_combo(state);
 
     // Expected damage over the next two turns (matches the combo gate)
     let combo_damage = calculate_two_turn_combo_damage(state);
 
-    // Determine primary failure reason (in priority order)
-    let primary_failure = if mana.total_mana < 4 {
-        FailureReason::InsufficientMana
-    } else if let Some(kind) = mana.wrong_mana {
-        FailureReason::WrongMana(kind)
-    } else if !spider_man_in_hand {
-        FailureReason::SpiderManNotInHand
-    } else if !bringer_in_graveyard {
-        FailureReason::NoBringerInGraveyard
+    // Primary failure: combo pieces first, then whether the mana can cast them
+    let spider_available = state.hand.cards().iter().any(|c| c.name() == "Superior Spider-Man")
+        || (state.hand.cards().iter().any(|c| c.name() == "Beseech the Mirror")
+            && crate::game::cards::beseech_bargain_fodder(state).is_some()
+            && state.library.cards().iter().any(|c| c.name() == "Superior Spider-Man"));
+    let primary_failure = if !spider_available {
+        FailureReason::SpiderManNotAvailable
+    } else if !combo.pieces_ready {
+        FailureReason::NoTargetInGraveyard
+    } else if combo.blocked == Some(ComboBlock::TooFewMana) {
+        FailureReason::PiecesReadyTooFewMana
+    } else if combo.blocked == Some(ComboBlock::WrongColors) {
+        FailureReason::PiecesReadyWrongColors
     } else if combo_damage < state.opponent_life as u32 {
         FailureReason::InsufficientDamage
     } else {
@@ -236,6 +301,7 @@ pub fn analyze_turn4_state(state: &GameState, db: &CardDatabase) -> Turn4Analysi
     Turn4Analysis {
         primary_failure,
         mana,
+        combo,
     }
 }
 
@@ -315,6 +381,15 @@ pub fn aggregate_results(analyses: &[Turn4Analysis]) -> AnalysisResults {
 
     for analysis in analyses {
         *results.failure_counts.entry(analysis.primary_failure).or_insert(0) += 1;
+        if analysis.combo.pieces_ready {
+            results.pieces_ready_games += 1;
+            if analysis.combo.castable { results.pieces_castable_games += 1; }
+            match analysis.combo.blocked {
+                Some(ComboBlock::TooFewMana) => results.pieces_too_few_mana_games += 1,
+                Some(ComboBlock::WrongColors) => results.pieces_wrong_colors_games += 1,
+                None => {}
+            }
+        }
         total_mana += analysis.mana.total_mana as u64;
         if analysis.mana.has_blue { blue_count += 1; }
         if analysis.mana.has_black { black_count += 1; }
@@ -364,6 +439,53 @@ mod tests {
     fn add_land(state: &mut GameState, db: &CardDatabase, name: &str) {
         let card = db.get_card(name).expect(name);
         state.battlefield.add_permanent(Permanent::new(card, 1));
+    }
+
+    #[test]
+    fn test_combo_pieces_ready_and_castable() {
+        let db = db();
+        let mut state = GameState::new();
+        for l in ["Watery Grave", "Watery Grave", "Swamp", "Island"] { add_land(&mut state, &db, l); }
+        state.hand.add_card(db.get_card("Superior Spider-Man").expect("Spidey"));
+        state.graveyard.add_card(db.get_card("Bringer of the Last Gift").expect("Bringer"));
+        let c = check_combo(&state);
+        assert!(c.pieces_ready && c.castable);
+        assert_eq!(c.blocked, None);
+    }
+
+    #[test]
+    fn test_combo_pieces_ready_but_too_few_mana() {
+        let db = db();
+        let mut state = GameState::new();
+        for l in ["Watery Grave", "Swamp", "Island"] { add_land(&mut state, &db, l); }
+        state.hand.add_card(db.get_card("Superior Spider-Man").expect("Spidey"));
+        state.graveyard.add_card(db.get_card("Bringer of the Last Gift").expect("Bringer"));
+        let c = check_combo(&state);
+        assert!(c.pieces_ready && !c.castable);
+        assert_eq!(c.blocked, Some(ComboBlock::TooFewMana));
+    }
+
+    #[test]
+    fn test_combo_pieces_ready_via_beseech() {
+        let db = db();
+        let mut state = GameState::new();
+        for l in ["Swamp", "Swamp", "Swamp", "Island"] { add_land(&mut state, &db, l); }
+        state.battlefield.add_permanent(Permanent::new(db.get_card("Does Machines").expect("DM"), 1));
+        state.hand.add_card(db.get_card("Beseech the Mirror").expect("Beseech"));
+        state.library.add_card(db.get_card("Superior Spider-Man").expect("Spidey"));
+        state.graveyard.add_card(db.get_card("Bringer of the Last Gift").expect("Bringer"));
+        let c = check_combo(&state);
+        assert!(c.pieces_ready && c.castable, "Beseech with fodder fetches and free-casts Spider-Man");
+    }
+
+    #[test]
+    fn test_combo_pieces_not_ready_without_target() {
+        let db = db();
+        let mut state = GameState::new();
+        for l in ["Watery Grave", "Watery Grave", "Swamp", "Island"] { add_land(&mut state, &db, l); }
+        state.hand.add_card(db.get_card("Superior Spider-Man").expect("Spidey"));
+        let c = check_combo(&state);
+        assert!(!c.pieces_ready);
     }
 
     #[test]

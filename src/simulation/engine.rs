@@ -16,6 +16,8 @@ pub struct Turn4ManaCheck {
     pub had_4plus_mana: bool,
     /// Had 4+ mana but could not pay {2}{U}{B} (Spider-Man's real cost)
     pub wrong_mana: bool,
+    /// Combo pieces at the check point, and whether the mana can cast them
+    pub combo: analyze::ComboCheck,
 }
 
 /// Result of a single game simulation
@@ -1213,6 +1215,7 @@ pub fn run_game(
                 turn4_mana = Some(Turn4ManaCheck {
                     had_4plus_mana: check.total_mana >= 4,
                     wrong_mana: check.wrong_mana.is_some(),
+                    combo: analyze::check_combo(&probe),
                 });
             }
         }
