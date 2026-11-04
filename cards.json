@@ -734,7 +734,8 @@
     "subtype": "utility",
     "enters_tapped": true,
     "colors": [
-      "C"
+      "U",
+      "B"
     ]
   },
   {
