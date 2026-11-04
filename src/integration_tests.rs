@@ -28,7 +28,11 @@ fn test_same_seed_produces_same_result() {
 
     // Results should be identical
     assert_eq!(result1.win_turn, result2.win_turn, "Same seed should produce same win_turn");
-    assert_eq!(result1.turn_with_ubg, result2.turn_with_ubg, "Same seed should produce same turn_with_ubg");
+    assert_eq!(result1.turn4_mana, result2.turn4_mana, "Same seed should produce same turn4_mana");
+    assert_eq!(
+        result1.first_turn_can_pay_spider_man, result2.first_turn_can_pay_spider_man,
+        "Same seed should produce same first_turn_can_pay_spider_man"
+    );
 }
 
 #[test]
@@ -42,7 +46,7 @@ fn test_different_seeds_produce_different_results() {
 
     // At least one property should differ (very unlikely to be identical)
     let results_differ = result1.win_turn != result2.win_turn
-        || result1.turn_with_ubg != result2.turn_with_ubg;
+        || result1.first_turn_can_pay_spider_man != result2.first_turn_can_pay_spider_man;
 
     assert!(results_differ, "Different seeds should likely produce different results");
 }
@@ -71,10 +75,10 @@ fn test_mana_color_tracking() {
 
     let result = run_game(&deck, 99999, &db, false);
 
-    // Verify mana color tracking - if we have UBG, it should be a valid turn
-    if let Some(ubg_turn) = result.turn_with_ubg {
-        assert!(ubg_turn > 0, "UBG turn should be positive");
-        assert!(ubg_turn <= 20, "UBG turn should be within game limit");
+    // Verify mana tracking - if {2}{U}{B} became payable, it should be a valid turn
+    if let Some(pay_turn) = result.first_turn_can_pay_spider_man {
+        assert!(pay_turn > 0, "First payable turn should be positive");
+        assert!(pay_turn <= 20, "First payable turn should be within game limit");
     }
 }
 
@@ -110,6 +114,7 @@ fn test_deterministic_rng_sequence() {
     // All results should be identical
     for i in 1..results.len() {
         assert_eq!(results[0].win_turn, results[i].win_turn);
-        assert_eq!(results[0].turn_with_ubg, results[i].turn_with_ubg);
+        assert_eq!(results[0].turn4_mana, results[i].turn4_mana);
+        assert_eq!(results[0].first_turn_can_pay_spider_man, results[i].first_turn_can_pay_spider_man);
     }
 }

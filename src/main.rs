@@ -231,14 +231,26 @@ fn run_simulation(db: &CardDatabase, deck_file: &str, num_games: usize, seed: Op
         }
     }
 
-    // Mana color availability
-    let has_ubg: Vec<_> = results.iter().filter(|r| r.turn_with_ubg.is_some()).collect();
-    let avg_ubg_turn = if !has_ubg.is_empty() {
-        has_ubg
-            .iter()
-            .map(|r| r.turn_with_ubg.unwrap() as f64)
-            .sum::<f64>()
-            / has_ubg.len() as f64
+    // Turn 4 mana check (main phase, after the land drop, before spending mana)
+    let games_with_4plus = results.iter()
+        .filter(|r| r.turn4_mana.map_or(false, |m| m.had_4plus_mana))
+        .count();
+    let wrong_mana_games = results.iter()
+        .filter(|r| r.turn4_mana.map_or(false, |m| m.wrong_mana))
+        .count();
+    let wrong_mana_pct_games = wrong_mana_games as f64 / num_games as f64 * 100.0;
+    let wrong_mana_pct_4plus = if games_with_4plus > 0 {
+        wrong_mana_games as f64 / games_with_4plus as f64 * 100.0
+    } else {
+        0.0
+    };
+
+    // First turn on which {2}{U}{B} could be paid
+    let can_pay: Vec<u32> = results.iter()
+        .filter_map(|r| r.first_turn_can_pay_spider_man)
+        .collect();
+    let avg_first_pay_turn = if !can_pay.is_empty() {
+        can_pay.iter().map(|t| *t as f64).sum::<f64>() / can_pay.len() as f64
     } else {
         0.0
     };
@@ -246,7 +258,15 @@ fn run_simulation(db: &CardDatabase, deck_file: &str, num_games: usize, seed: Op
     println!("=== Results ===\n");
     println!("Win rate: {:.1}% ({}/{})", win_rate * 100.0, wins.len(), num_games);
     println!("Average win turn: {:.2}", avg_win_turn);
-    println!("Average UBG available: turn {:.2}", avg_ubg_turn);
+    println!(
+        "Wrong mana on turn 4: {:.1}% of games ({:.1}% of games with 4+ mana)",
+        wrong_mana_pct_games, wrong_mana_pct_4plus
+    );
+    println!(
+        "First turn able to pay {{2}}{{U}}{{B}}: {:.2} on average ({:.1}% of games)",
+        avg_first_pay_turn,
+        can_pay.len() as f64 / num_games as f64 * 100.0
+    );
     println!();
 
     println!("Turn distribution:");
@@ -608,22 +628,51 @@ fn analyze_turn4_failures(db: &CardDatabase, deck_file: &str, num_games: usize, 
     for (reason, count) in &failures {
         let pct = **count as f64 / num_games as f64 * 100.0;
         let bar = "█".repeat((pct / 2.0) as usize);
-
-        if **reason == FailureReason::ComboAvailable {
-            println!("  {:30} {:5.1}% {} ({})",
-                format!("{}", reason), pct, bar, count);
-        } else {
-            println!("  {:30} {:5.1}% {} ({})",
-                format!("{}", reason), pct, bar, count);
-        }
+        println!("  {:42} {:5.1}% {} ({})",
+            format!("{}", reason), pct, bar, count);
     }
 
     println!("\n--- Statistics ---\n");
-    println!("Average lands by turn 4: {:.2}", results.avg_lands);
+    println!("Average mana on turn 4 (after land drop): {:.2}", results.avg_mana);
     println!("Color availability:");
     println!("  Blue:  {:5.1}%", results.color_availability.0);
     println!("  Black: {:5.1}%", results.color_availability.1);
-    println!("  Green: {:5.1}%", results.color_availability.2);
+
+    println!("\n--- Wrong mana on turn 4 ---\n");
+    let pct_4plus = results.games_with_4plus_mana as f64 / num_games as f64 * 100.0;
+    println!("Games with 4+ mana: {:.1}% ({}/{})",
+        pct_4plus, results.games_with_4plus_mana, num_games);
+    let wrong_pct_games = results.wrong_mana_games as f64 / num_games as f64 * 100.0;
+    let wrong_pct_4plus = if results.games_with_4plus_mana > 0 {
+        results.wrong_mana_games as f64 / results.games_with_4plus_mana as f64 * 100.0
+    } else {
+        0.0
+    };
+    println!("Wrong mana (4+ mana, cannot pay {{2}}{{U}}{{B}}): {:.1}% of games ({:.1}% of games with 4+ mana)",
+        wrong_pct_games, wrong_pct_4plus);
+    use simulation::analyze::WrongManaKind;
+    for kind in [
+        WrongManaKind::NoBlue,
+        WrongManaKind::NoBlack,
+        WrongManaKind::NoBlueNoBlack,
+        WrongManaKind::CannotPayTogether,
+    ] {
+        let count = results.wrong_mana_counts.get(&kind).copied().unwrap_or(0);
+        println!("  {:38} {:5.2}% ({})",
+            format!("{}", kind), count as f64 / num_games as f64 * 100.0, count);
+    }
+
+    println!("\n--- Color-locked spells on turn 4 ---\n");
+    println!("Games with a color-locked spell in hand: {:.1}% ({}/{})",
+        results.color_locked_games as f64 / num_games as f64 * 100.0,
+        results.color_locked_games, num_games);
+    if !results.color_locked_cards.is_empty() {
+        println!("Top color-locked cards (games where the card was locked):");
+        for (name, count) in results.color_locked_cards.iter().take(10) {
+            println!("  {:38} {:5.2}% ({})",
+                name, *count as f64 / num_games as f64 * 100.0, count);
+        }
+    }
 
     // Calculate additional stats from raw analyses
     let combo_ready = failures.iter()

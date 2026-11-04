@@ -3,17 +3,31 @@ use crate::game::state::GameState;
 use crate::game::turns::{start_turn, draw_phase, upkeep_phase, end_phase, precombat_main_phase_start};
 use crate::game::cards;
 use crate::game::mana;
+use crate::simulation::analyze;
 use crate::simulation::decisions::DecisionEngine;
 use crate::rng::GameRng;
 use crate::simulation::mulligan::resolve_mulligans;
+
+/// Mana check at the turn 4 check point
+/// (turn 4 main phase, after the land drop, before any mana is spent)
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct Turn4ManaCheck {
+    /// Had 4 or more mana at the check point
+    pub had_4plus_mana: bool,
+    /// Had 4+ mana but could not pay {2}{U}{B} (Spider-Man's real cost)
+    pub wrong_mana: bool,
+}
 
 /// Result of a single game simulation
 #[derive(Debug, Clone)]
 pub struct GameResult {
     /// Turn on which the game was won (None if didn't win by turn 20)
     pub win_turn: Option<u32>,
-    /// First turn we had access to U, B, and G mana
-    pub turn_with_ubg: Option<u32>,
+    /// Turn 4 mana check (None if the game ended before turn 4)
+    pub turn4_mana: Option<Turn4ManaCheck>,
+    /// First turn on which {2}{U}{B} could be paid at the main-phase
+    /// check point (after the land drop, before any mana is spent)
+    pub first_turn_can_pay_spider_man: Option<u32>,
 }
 
 /// Check if the game has been won
@@ -1163,24 +1177,38 @@ pub fn run_game(
     
     // Game loop
     let max_turns = 20u32;
-    let mut turn_with_ubg = None;
+    let mut turn4_mana: Option<Turn4ManaCheck> = None;
+    let mut first_turn_can_pay_spider_man: Option<u32> = None;
 
     while state.turn < max_turns && !check_win_condition(&state) {
-        // Execute turn
-        execute_turn(&mut state, _db, verbose, &mut rng);
+        // Measurement only: probe the upcoming turn's mana check point
+        // (main phase, after the land drop, before any mana is spent).
+        // Works on a clone and consumes no RNG, so play is unchanged.
+        let upcoming_turn = state.turn + 1;
+        if first_turn_can_pay_spider_man.is_none() || upcoming_turn == 4 {
+            let mut probe = state.clone();
+            analyze::advance_to_mana_check_point(&mut probe);
+            let check = analyze::check_mana(&probe, _db);
 
-        // Track when all colors become available
-        if turn_with_ubg.is_none() {
-            let colors = get_available_colors(&state);
-            if colors.has_blue() && colors.has_black() && colors.has_green() {
-                turn_with_ubg = Some(state.turn);
+            if first_turn_can_pay_spider_man.is_none() && check.can_pay_spider_man {
+                first_turn_can_pay_spider_man = Some(upcoming_turn);
+            }
+            if upcoming_turn == 4 {
+                turn4_mana = Some(Turn4ManaCheck {
+                    had_4plus_mana: check.total_mana >= 4,
+                    wrong_mana: check.wrong_mana.is_some(),
+                });
             }
         }
+
+        // Execute turn
+        execute_turn(&mut state, _db, verbose, &mut rng);
     }
-    
+
     GameResult {
         win_turn: if check_win_condition(&state) { Some(state.turn) } else { None },
-        turn_with_ubg,
+        turn4_mana,
+        first_turn_can_pay_spider_man,
     }
 }
 
