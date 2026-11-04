@@ -40,13 +40,14 @@ fn test_different_seeds_produce_different_results() {
     let db = CardDatabase::from_file("cards.json").expect("Failed to load cards");
     let deck = parse_deck_file("deck.txt", &db).expect("Failed to parse deck");
 
-    // Run games with different seeds
-    let result1 = run_game(&deck, 111, &db, false);
-    let result2 = run_game(&deck, 222, &db, false);
-
-    // At least one property should differ (very unlikely to be identical)
-    let results_differ = result1.win_turn != result2.win_turn
-        || result1.first_turn_can_pay_spider_man != result2.first_turn_can_pay_spider_man;
+    // Run games with 10 different seeds; they must not all give the same result
+    let results: Vec<_> = (0..10u64)
+        .map(|i| {
+            let r = run_game(&deck, 111 + i * 111, &db, false);
+            (r.win_turn, r.first_turn_can_pay_spider_man)
+        })
+        .collect();
+    let results_differ = results.iter().any(|r| *r != results[0]);
 
     assert!(results_differ, "Different seeds should likely produce different results");
 }

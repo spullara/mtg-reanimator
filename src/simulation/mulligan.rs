@@ -186,45 +186,17 @@ pub fn bo1_opening_hand(
     chosen
 }
 
-/// Resolve mulligans starting from opening hand
-/// Returns the final hand after all mulligans and scries
-pub fn resolve_mulligans(library: &mut Vec<Card>, rng: &mut GameRng) -> Vec<Card> {
-    // Draw two hands of 7 using BO1 hand smoother
-    let hand1: Vec<Card> = library.drain(0..7).collect();
-    let hand2: Vec<Card> = library.drain(0..7).collect();
-    
-    let lands1 = count_lands(&hand1);
-    let lands2 = count_lands(&hand2);
-    
-    let (mut chosen_hand, rejected_hand) = if lands1 >= 2 && lands2 >= 2 {
-        // Both hands have at least 2 lands, pick the one with fewer lands
-        if lands1 < lands2 {
-            (hand1, hand2)
-        } else if lands2 < lands1 {
-            (hand2, hand1)
-        } else {
-            // Same land count, random pick (matches TypeScript behavior)
-            if rng.random() < 0.5 {
-                (hand1, hand2)
-            } else {
-                (hand2, hand1)
-            }
-        }
-    } else if lands1 >= 2 {
-        (hand1, hand2)
-    } else if lands2 >= 2 {
-        (hand2, hand1)
-    } else {
-        // Both hands have 0-1 lands, need to mulligan
-        library.extend(hand1);
-        library.extend(hand2);
-        rng.shuffle(library);
-        return mulligan_hand(library, 6, rng);
-    };
-    
-    // Put rejected hand back into library and shuffle
-    library.extend(rejected_hand);
-    rng.shuffle(library);
+/// Resolve the opening hand: Arena's Bo1 hand smoothing for the first 7
+/// (`bo1_opening_hand`: of two hands, keep the one whose land count is closest
+/// to the deck's land ratio), then the normal keep / mulligan decisions.
+/// Returns the final hand after all mulligans and scries.
+pub fn resolve_mulligans(
+    library: &mut Vec<Card>,
+    rng: &mut GameRng,
+    deck_land_count: usize,
+    deck_size: usize,
+) -> Vec<Card> {
+    let mut chosen_hand = bo1_opening_hand(library, rng, deck_land_count, deck_size);
 
     // Check if we need to mulligan the chosen hand
     let mut mulligan_count = 0;
@@ -307,7 +279,7 @@ mod tests {
             library.push(db.get_card("Forest").expect("Forest should exist"));
         }
 
-        let hand = resolve_mulligans(&mut library, &mut rng);
+        let hand = resolve_mulligans(&mut library, &mut rng, 60, 60);
 
         // Should have a hand of at least 4 cards (minimum after mulligans)
         assert!(hand.len() >= 4, "Hand should have at least 4 cards");

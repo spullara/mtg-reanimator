@@ -221,7 +221,22 @@ impl DecisionEngine {
             })
         };
 
-        let mana_needed = lands.iter().any(|(_, c)| matches!(c, Card::Land(l) if enables_new_spell(l)));
+        // Planning for the combo turn matters only with Spider-Man or Beseech
+        // in hand. Without them, play greedily: use the land's mana now to dig.
+        let combo_piece_in_hand = hand.iter()
+            .any(|c| c.name() == "Superior Spider-Man" || c.name() == "Beseech the Mirror");
+        let casts_something_now = |land: &LandCard| -> bool {
+            if enters_tapped(land) { return false; }
+            let mut colors_after = colors_available.clone();
+            for color in &land.colors { colors_after.insert(*color); }
+            spells_in_hand.iter().any(|spell| {
+                spell.mana_value() <= mana_after_land_drop && Self::has_colors(spell, &colors_after)
+            })
+        };
+        let enables = |land: &LandCard| -> bool {
+            if combo_piece_in_hand { enables_new_spell(land) } else { casts_something_now(land) }
+        };
+        let mana_needed = lands.iter().any(|(_, c)| matches!(c, Card::Land(l) if enables(l)));
 
         // Rank: lower is better
         let rank = |land: &LandCard| -> (u8, u8, u8, i64) {
@@ -231,7 +246,7 @@ impl DecisionEngine {
             if mana_needed {
                 // Play an untapped land that enables the spell; spend the
                 // Starting Town that would be tapped later first.
-                let tier = if !enables_new_spell(land) { 3 }
+                let tier = if !enables(land) { 3 }
                     else if expiring(land) { 0 }
                     else if land.subtype == LandSubtype::Slowland { 1 }
                     else { 2 };

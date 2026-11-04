@@ -272,7 +272,12 @@ pub fn run_game_to_turn4(
         }
     }
 
-    let opening_hand = resolve_mulligans(&mut library_cards, &mut rng);
+    let opening_hand = resolve_mulligans(
+        &mut library_cards,
+        &mut rng,
+        deck.iter().filter(|c| matches!(c, Card::Land(_))).count(),
+        deck.len(),
+    );
 
     // Put remaining cards back in library
     for card in library_cards {
