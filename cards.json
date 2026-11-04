@@ -640,6 +640,18 @@
     ]
   },
   {
+    "name": "Theorix Charm",
+    "card_type": "instant",
+    "mana_cost": {
+      "blue": 1,
+      "black": 1
+    },
+    "mana_value": 2,
+    "abilities": [
+      "mill_3_draw_1"
+    ]
+  },
+  {
     "name": "Requiting Hex",
     "card_type": "instant",
     "mana_cost": {

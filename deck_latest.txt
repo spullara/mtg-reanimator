@@ -1,4 +1,4 @@
-# Latest reanimator deck (from Sam, 2026-11-04)
+# Latest reanimator deck (from Sam, 2026-11-04; -1 Deceit, +1 Theorix Charm)
 Deck
 4 Dark Matter Manipulator (FRA) 52
 4 Starting Town (FIN) 289
@@ -10,7 +10,8 @@ Deck
 4 Does Machines (TMT) 34
 2 Beseech the Mirror (WOE) 82
 1 Valgavoth, Terror Eater (DSK) 120
-3 Deceit (ECL) 212
+2 Deceit (ECL) 212
+1 Theorix Charm (FRA) 155
 1 Marang River Regent (TDM) 51
 2 Grim Bauble (DFT) 88
 3 Bitter Triumph (LCI) 91

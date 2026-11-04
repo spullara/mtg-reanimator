@@ -29,6 +29,7 @@ fn is_mill_enabler(card: &Card) -> bool {
             | "Corroding Dragonstorm"
             | "Bellowing Crier"
             | "Yuriko, Hope from the Shadows"
+            | "Theorix Charm"
     )
 }
 

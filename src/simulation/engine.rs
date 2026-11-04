@@ -918,6 +918,7 @@ pub fn main_phase(state: &mut GameState, db: &CardDatabase, verbose: bool, rng: 
                 "Corroding Dragonstorm",
                 "Bellowing Crier",
                 "Yuriko, Hope from the Shadows",
+                "Theorix Charm",
             ];
             let a_is_mill = mill_spells.contains(&a_card.name());
             let b_is_mill = mill_spells.contains(&b_card.name());

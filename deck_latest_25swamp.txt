@@ -1,4 +1,4 @@
-# deck_latest.txt with a 25th land: +1 Swamp, -1 Deceit. Avg win turn 6.50-6.52 (50k games, 4 independent seed bases)
+# deck_latest.txt with a 25th land: +1 Swamp, -1 Deceit
 Deck
 4 Dark Matter Manipulator (FRA) 52
 4 Starting Town (FIN) 289
@@ -10,7 +10,8 @@ Deck
 4 Does Machines (TMT) 34
 2 Beseech the Mirror (WOE) 82
 1 Valgavoth, Terror Eater (DSK) 120
-2 Deceit (ECL) 212
+1 Deceit (ECL) 212
+1 Theorix Charm (FRA) 155
 1 Marang River Regent (TDM) 51
 2 Grim Bauble (DFT) 88
 3 Bitter Triumph (LCI) 91

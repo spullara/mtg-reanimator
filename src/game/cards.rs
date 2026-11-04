@@ -342,6 +342,17 @@ pub fn cast_spell(
                             }
                         }
                     }
+                    "mill_3_draw_1" => {
+                        // Theorix Charm (mill mode): mill three cards, then draw a card.
+                        // The counter and -2/-2 modes do nothing in a goldfish game.
+                        for card in state.library.mill(3) {
+                            if verbose {
+                                println!("    Milled: {}", card.name());
+                            }
+                            state.graveyard.add_card(card);
+                        }
+                        state.draw_card();
+                    }
                     "discard_outlet_removal" => {
                         // Bitter Triumph: additional cost is discard a card or pay 3 life.
                         // Use it as a discard outlet (bin a reanimation target), or pay
@@ -2753,6 +2764,21 @@ mod new_card_tests {
 
     fn load_db() -> CardDatabase {
         CardDatabase::from_file("cards.json").expect("Failed to load cards")
+    }
+
+    #[test]
+    fn test_theorix_charm_mills_3_and_draws_1() {
+        let db = load_db();
+        let mut state = GameState::new();
+        for _ in 0..5 {
+            state.library.add_card(db.get_card("Bringer of the Last Gift").expect("Bringer"));
+        }
+        let charm = db.get_card("Theorix Charm").expect("Theorix Charm");
+        let mut rng = GameRng::new(Some(1));
+        cast_spell(&mut state, &charm, &db, false, &mut rng).expect("cast should resolve");
+        assert_eq!(state.graveyard.cards().iter().filter(|c| c.name() == "Bringer of the Last Gift").count(), 3);
+        assert_eq!(state.hand.cards().len(), 1);
+        assert_eq!(state.library.cards().len(), 1);
     }
 
     #[test]
