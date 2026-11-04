@@ -1,12 +1,117 @@
 use crate::card::{Card, CardType, LandCard, LandSubtype, ManaColor};
 use crate::game::mana;
 use crate::game::state::GameState;
+use crate::game::zones::CounterType;
 use std::collections::HashSet;
+
+/// Creatures we want in the graveyard for reanimation, best first
+pub const REANIMATION_TARGETS: &[&str] = &[
+    "Bringer of the Last Gift",
+    "Valgavoth, Terror Eater",
+    "Terror of the Peaks",
+    "Marang River Regent",
+    "Deceit",
+    "Ardyn, the Usurper",
+];
 
 /// Decision engine for MTG Reanimator AI
 pub struct DecisionEngine;
 
 impl DecisionEngine {
+    /// Find the best reanimation target in hand (if any)
+    pub fn reanimation_target_in_hand(state: &GameState) -> Option<usize> {
+        for name in REANIMATION_TARGETS {
+            if let Some(idx) = state.hand.cards().iter().position(|c| c.name() == *name) {
+                return Some(idx);
+            }
+        }
+        None
+    }
+
+    /// Find a blank card in hand that we are happy to discard:
+    /// Requiting Hex, an extra Bitter Triumph, or an excess land (keep 2 for land drops)
+    pub fn choose_blank_discard(state: &GameState) -> Option<usize> {
+        if let Some(idx) = state.hand.cards().iter().position(|c| c.name() == "Requiting Hex") {
+            return Some(idx);
+        }
+
+        let bitter_count = state.hand.cards().iter()
+            .filter(|c| c.name() == "Bitter Triumph")
+            .count();
+        if bitter_count > 1 {
+            if let Some(idx) = state.hand.cards().iter().position(|c| c.name() == "Bitter Triumph") {
+                return Some(idx);
+            }
+        }
+
+        let lands: Vec<usize> = state.hand.cards().iter().enumerate()
+            .filter(|(_, c)| matches!(c, Card::Land(_)))
+            .map(|(i, _)| i)
+            .collect();
+        if lands.len() > 2 {
+            return lands.last().copied();
+        }
+
+        None
+    }
+
+    /// Choose which card to discard for a mandatory discard.
+    /// Priority: reanimation targets (the plan wants them in the graveyard),
+    /// then blanks (Requiting Hex, extra Bitter Triumph, excess lands),
+    /// then the last card that is not Superior Spider-Man.
+    pub fn choose_discard(state: &GameState) -> Option<usize> {
+        if state.hand.size() == 0 {
+            return None;
+        }
+
+        if let Some(idx) = Self::reanimation_target_in_hand(state) {
+            return Some(idx);
+        }
+
+        if let Some(idx) = Self::choose_blank_discard(state) {
+            return Some(idx);
+        }
+
+        // Last resort: keep Superior Spider-Man if anything else is available
+        let last_non_spider = state.hand.cards().iter()
+            .rposition(|c| c.name() != "Superior Spider-Man");
+        last_non_spider.or(Some(state.hand.size() - 1))
+    }
+
+    /// Permanents worth bouncing to hand to recast for their ETB value, best first:
+    /// Does Machines (pure value), an impending Overlord (not a creature yet),
+    /// and a Fear of Missing Out that entered this turn (cannot attack yet).
+    /// Never bounces Spider-Man copies or combat-ready creatures.
+    pub fn choose_bounce_targets(state: &GameState, max: usize) -> Vec<usize> {
+        let perms = state.battlefield.permanents();
+        let mut targets: Vec<usize> = Vec::new();
+
+        for (i, p) in perms.iter().enumerate() {
+            if p.card.name() == "Does Machines" && p.is_copy_of.is_none() {
+                targets.push(i);
+            }
+        }
+        for (i, p) in perms.iter().enumerate() {
+            if p.card.name() == "Overlord of the Balemurk"
+                && p.get_counter(CounterType::Time) > 0
+                && p.is_copy_of.is_none()
+            {
+                targets.push(i);
+            }
+        }
+        for (i, p) in perms.iter().enumerate() {
+            if p.card.name() == "Fear of Missing Out"
+                && p.turn_entered >= state.turn
+                && p.is_copy_of.is_none()
+            {
+                targets.push(i);
+            }
+        }
+
+        targets.truncate(max);
+        targets
+    }
+
     /// Choose which land to play - matches TypeScript's sophisticated logic
     pub fn choose_land_to_play(hand: &[Card], state: &GameState) -> Option<usize> {
         let lands: Vec<(usize, &Card)> = hand

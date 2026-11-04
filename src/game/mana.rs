@@ -219,6 +219,33 @@ pub fn can_tap_for_mana(
         return ColorFlags(ColorFlags::BLUE);
     }
 
+    // Handle Blazemire Verge - {R} only if controlling Swamp/Mountain
+    if land.base.name == "Blazemire Verge" {
+        let has_swamp_or_mountain = state
+            .battlefield
+            .permanents()
+            .iter()
+            .any(|p| {
+                if let Card::Land(l) = &p.card {
+                    matches!(
+                        l.base.name.as_str(),
+                        "Swamp"
+                            | "Mountain"
+                            | "Blood Crypt"
+                            | "Watery Grave"
+                            | "Undercity Sewers"
+                            | "Underground Mortuary"
+                    )
+                } else {
+                    false
+                }
+            });
+        if has_swamp_or_mountain {
+            return ColorFlags(ColorFlags::BLACK | ColorFlags::RED);
+        }
+        return ColorFlags(ColorFlags::BLACK);
+    }
+
     // Handle Multiversal Passage - produces chosen color
     if land.base.name == "Multiversal Passage" {
         if let Some(chosen_type) = &permanent.chosen_basic_type {
@@ -550,6 +577,34 @@ mod tests {
         };
 
         assert!(!pool.can_pay(&cost));
+    }
+
+    #[test]
+    fn test_blazemire_verge_red_condition() {
+        use crate::card::CardDatabase;
+        use crate::game::zones::Permanent;
+
+        let db = CardDatabase::from_file("cards.json").expect("Failed to load cards");
+        let mut state = GameState::new();
+
+        let blazemire = Permanent::new(db.get_card("Blazemire Verge").expect("Blazemire"), 1);
+
+        // Without a Swamp or Mountain: black only
+        let colors = can_tap_for_mana(&blazemire, &state, None);
+        assert!(colors.has_black());
+        assert!(!colors.has_red(), "No red without a Swamp or Mountain");
+
+        // With a Swamp: black and red
+        state.battlefield.add_permanent(Permanent::new(db.get_card("Swamp").expect("Swamp"), 1));
+        let colors = can_tap_for_mana(&blazemire, &state, None);
+        assert!(colors.has_black());
+        assert!(colors.has_red(), "Red once a Swamp is in play");
+
+        // Blood Crypt (Swamp Mountain) also satisfies the condition
+        let mut state2 = GameState::new();
+        state2.battlefield.add_permanent(Permanent::new(db.get_card("Blood Crypt").expect("Blood Crypt"), 1));
+        let colors = can_tap_for_mana(&blazemire, &state2, None);
+        assert!(colors.has_red(), "Blood Crypt has the Swamp and Mountain types");
     }
 
     #[test]

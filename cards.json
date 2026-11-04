@@ -558,5 +558,174 @@
     "abilities": [
       "pump_spell"
     ]
+  },
+  {
+    "name": "Dark Matter Manipulator",
+    "card_type": "creature",
+    "mana_cost": {
+      "black": 1
+    },
+    "mana_value": 1,
+    "power": 1,
+    "toughness": 2,
+    "creature_types": [
+      "Human",
+      "Warlock"
+    ],
+    "abilities": [
+      "etb_mill_3",
+      "power_bonus_per_7_in_graveyard"
+    ]
+  },
+  {
+    "name": "Does Machines",
+    "card_type": "enchantment",
+    "mana_cost": {
+      "blue": 1,
+      "generic": 1
+    },
+    "mana_value": 2,
+    "abilities": [
+      "etb_mill_2_draw_2_discard_2"
+    ]
+  },
+  {
+    "name": "Fear of Missing Out",
+    "card_type": "creature",
+    "mana_cost": {
+      "red": 1,
+      "generic": 1
+    },
+    "mana_value": 2,
+    "power": 2,
+    "toughness": 3,
+    "creature_types": [
+      "Nightmare"
+    ],
+    "abilities": [
+      "etb_discard_1_draw_1"
+    ]
+  },
+  {
+    "name": "Beseech the Mirror",
+    "card_type": "sorcery",
+    "mana_cost": {
+      "black": 3,
+      "generic": 1
+    },
+    "mana_value": 4,
+    "abilities": [
+      "bargain_tutor"
+    ]
+  },
+  {
+    "name": "Bitter Triumph",
+    "card_type": "instant",
+    "mana_cost": {
+      "black": 1,
+      "generic": 1
+    },
+    "mana_value": 2,
+    "abilities": [
+      "discard_outlet_removal"
+    ]
+  },
+  {
+    "name": "Requiting Hex",
+    "card_type": "instant",
+    "mana_cost": {
+      "black": 1
+    },
+    "mana_value": 1,
+    "abilities": []
+  },
+  {
+    "name": "Deceit",
+    "card_type": "creature",
+    "mana_cost": {
+      "black": 2,
+      "generic": 4
+    },
+    "mana_value": 6,
+    "power": 5,
+    "toughness": 5,
+    "creature_types": [
+      "Elemental",
+      "Incarnation"
+    ],
+    "abilities": [
+      "evoke"
+    ]
+  },
+  {
+    "name": "Marang River Regent",
+    "card_type": "creature",
+    "mana_cost": {
+      "blue": 2,
+      "generic": 4
+    },
+    "mana_value": 6,
+    "power": 6,
+    "toughness": 7,
+    "creature_types": [
+      "Dragon"
+    ],
+    "abilities": [
+      "flying",
+      "etb_bounce_up_to_two",
+      "omen_draw_3_discard_1"
+    ]
+  },
+  {
+    "name": "Valgavoth, Terror Eater",
+    "card_type": "creature",
+    "mana_cost": {
+      "black": 3,
+      "generic": 6
+    },
+    "mana_value": 9,
+    "power": 9,
+    "toughness": 9,
+    "is_legendary": true,
+    "creature_types": [
+      "Elder",
+      "Demon"
+    ],
+    "abilities": [
+      "flying",
+      "lifelink"
+    ]
+  },
+  {
+    "name": "Blood Crypt",
+    "card_type": "land",
+    "mana_value": 0,
+    "subtype": "shock",
+    "enters_tapped": false,
+    "colors": [
+      "B",
+      "R"
+    ]
+  },
+  {
+    "name": "Blazemire Verge",
+    "card_type": "land",
+    "mana_value": 0,
+    "subtype": "utility",
+    "enters_tapped": false,
+    "colors": [
+      "B",
+      "R"
+    ]
+  },
+  {
+    "name": "Pit of Offerings",
+    "card_type": "land",
+    "mana_value": 0,
+    "subtype": "utility",
+    "enters_tapped": true,
+    "colors": [
+      "C"
+    ]
   }
 ]

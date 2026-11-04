@@ -1,4 +1,4 @@
-use crate::card::{Card, CardDatabase, ColorFlags, LandCard, LandSubtype, ManaColor};
+use crate::card::{Card, CardDatabase, ColorFlags, LandCard, LandSubtype, ManaColor, ManaCost};
 use crate::game::state::GameState;
 use crate::game::turns::{start_turn, draw_phase, upkeep_phase, end_phase, precombat_main_phase_start};
 use crate::game::cards;
@@ -49,7 +49,7 @@ fn has_ardyn_on_battlefield(state: &GameState) -> bool {
 /// Check if a permanent is a Demon (has "Demon" in creature_types or is a copy of a Demon)
 fn is_demon(permanent: &crate::game::zones::Permanent) -> bool {
     // Known Demons in the game (for copy checks)
-    const KNOWN_DEMONS: &[&str] = &["Bringer of the Last Gift"];
+    const KNOWN_DEMONS: &[&str] = &["Bringer of the Last Gift", "Valgavoth, Terror Eater"];
 
     // Check if the card itself is a Demon
     let card_is_demon = match &permanent.card {
@@ -202,11 +202,16 @@ pub fn simulate_combat(state: &mut GameState, verbose: bool) -> u32 {
         attackers.push(idx);
     }
 
+    // Dark Matter Manipulator gets +2/+0 for each 7 cards in our graveyard
+    let graveyard_power_bonus = 2 * (state.graveyard.cards().len() as u32 / 7);
+
     // Tap all attackers and calculate damage
     for idx in &attackers {
-        // Check if demon BEFORE taking mutable reference
-        let is_demon_attacker = if let Some(perm) = state.battlefield.permanents().get(*idx) {
-            ardyn_on_battlefield && is_demon(perm)
+        // Check lifelink BEFORE taking mutable reference:
+        // Demons have lifelink while Ardyn is around; Valgavoth has it innately
+        let has_lifelink = if let Some(perm) = state.battlefield.permanents().get(*idx) {
+            (ardyn_on_battlefield && is_demon(perm))
+                || perm.card.name() == "Valgavoth, Terror Eater"
         } else {
             false
         };
@@ -216,11 +221,14 @@ pub fn simulate_combat(state: &mut GameState, verbose: bool) -> u32 {
 
             // Get creature power (use the base creature's power - copies like Spider-Man keep their own P/T)
             if let Card::Creature(creature) = &permanent.card {
-                let power = creature.power;
+                let mut power = creature.power;
+                if creature.base.name == "Dark Matter Manipulator" && permanent.is_copy_of.is_none() {
+                    power += graveyard_power_bonus;
+                }
                 total_damage += power;
 
-                // Track lifelink damage for Demons when Ardyn is present
-                if is_demon_attacker {
+                // Track lifelink damage
+                if has_lifelink {
                     lifelink_damage += power;
                 }
             }
@@ -699,6 +707,8 @@ pub fn main_phase(state: &mut GameState, db: &CardDatabase, verbose: bool, rng: 
         let combo_is_lethal = has_bringer_in_graveyard && cards::is_combo_lethal(state);
         let has_spider_man_in_hand = state.hand.cards().iter()
             .any(|c| c.name() == "Superior Spider-Man");
+        let has_reanimation_target_in_hand =
+            DecisionEngine::reanimation_target_in_hand(state).is_some();
 
         // Log when we're holding back the combo
         if verbose && has_bringer_in_graveyard && has_spider_man_in_hand && !combo_is_lethal {
@@ -717,7 +727,44 @@ pub fn main_phase(state: &mut GameState, db: &CardDatabase, verbose: bool, rng: 
                 if matches!(c, Card::Land(_)) {
                     return false;
                 }
+
+                // Requiting Hex is removal only - a blank with no opponent creatures
+                if c.name() == "Requiting Hex" {
+                    return false;
+                }
+
+                // Deceit is always evoked for {U/B}{U/B} (put a creature into the
+                // graveyard); never hard-cast it
+                if c.name() == "Deceit" {
+                    return cards::can_afford_deceit_evoke(state);
+                }
+
                 if !mana::can_cast_spell(c, state) {
+                    return false;
+                }
+
+                // Bitter Triumph: only as a discard outlet (reanimation target in
+                // hand) or to kill our own creature for Ardyn's Starscourge
+                if c.name() == "Bitter Triumph" {
+                    let has_outlet_use = DecisionEngine::reanimation_target_in_hand(state).is_some();
+                    let has_ardyn_in_gy = state.graveyard.cards().iter()
+                        .any(|card| card.name() == "Ardyn, the Usurper");
+                    let other_creatures_in_gy = state.graveyard.cards().iter()
+                        .filter(|card| matches!(card, Card::Creature(_)) && card.name() != "Ardyn, the Usurper")
+                        .count();
+                    let has_self_kill_use = has_ardyn_in_gy
+                        && other_creatures_in_gy == 0
+                        && state.battlefield.permanents().iter().any(|p| {
+                            matches!(p.card.name(), "Dark Matter Manipulator" | "Fear of Missing Out")
+                                && p.is_copy_of.is_none()
+                        });
+                    if !has_outlet_use && !has_self_kill_use {
+                        return false;
+                    }
+                }
+
+                // Beseech the Mirror: only when it has a useful fetch
+                if c.name() == "Beseech the Mirror" && !cards::beseech_useful(state) {
                     return false;
                 }
 
@@ -754,6 +801,7 @@ pub fn main_phase(state: &mut GameState, db: &CardDatabase, verbose: bool, rng: 
                             let has_mill_creature_in_gy = state.graveyard.cards().iter()
                                 .any(|card| matches!(card.name(),
                                     "Overlord of the Balemurk" |
+                                    "Dark Matter Manipulator" |
                                     "Kiora, the Rising Tide" |
                                     "Town Greeter"));
 
@@ -799,6 +847,19 @@ pub fn main_phase(state: &mut GameState, db: &CardDatabase, verbose: bool, rng: 
                 }
             }
 
+            // Priority 2a: Discard outlets if a reanimation target is in hand
+            // (Bitter Triumph discards it directly; the looters can too)
+            if has_reanimation_target_in_hand {
+                for outlet in ["Bitter Triumph", "Fear of Missing Out", "Does Machines"] {
+                    if a_card.name() == outlet {
+                        return std::cmp::Ordering::Less;
+                    }
+                    if b_card.name() == outlet {
+                        return std::cmp::Ordering::Greater;
+                    }
+                }
+            }
+
             // Priority 2: Kiora or Formidable Speaker if Bringer/Terror in hand
             // (These can discard combo pieces to the graveyard)
             if has_bringer_in_hand || has_terror_in_hand {
@@ -818,12 +879,16 @@ pub fn main_phase(state: &mut GameState, db: &CardDatabase, verbose: bool, rng: 
                 }
             }
 
-            // Priority 3: Mill spells
+            // Priority 3: Mill/graveyard-filling spells
             let mill_spells = vec![
                 "Cache Grab",
                 "Dredger's Insight",
                 "Town Greeter",
                 "Overlord of the Balemurk",
+                "Dark Matter Manipulator",
+                "Does Machines",
+                "Fear of Missing Out",
+                "Deceit",
             ];
             let a_is_mill = mill_spells.contains(&a_card.name());
             let b_is_mill = mill_spells.contains(&b_card.name());
@@ -851,6 +916,26 @@ pub fn main_phase(state: &mut GameState, db: &CardDatabase, verbose: bool, rng: 
 
             if let Some(card) = state.hand.remove_card(spell_idx) {
                 let card_name = card.name().to_string();
+
+                // Deceit is always evoked: pay {U/B}{U/B} and it goes straight to
+                // the graveyard (it is sacrificed when it enters). When paid with
+                // {U}{U}, its ETB bounces one of our own value permanents to hand.
+                if card_name == "Deceit" {
+                    let (cost, bounce) = cards::deceit_evoke_payment(state);
+                    if mana::tap_lands_for_cost(&cost, state, None) {
+                        if verbose {
+                            println!("  [Cast] Deceit (evoke{})", if bounce { ", paid {U}{U}" } else { "" });
+                        }
+                        if bounce {
+                            cards::resolve_bounce_recast_targets(state, 1, verbose);
+                        }
+                        state.graveyard.add_card(card);
+                        cast_any = true;
+                    } else {
+                        state.hand.add_card(card);
+                    }
+                    continue;
+                }
 
                 // Get for_creature for Cavern of Souls handling and impending check
                 let for_creature = match &card {
@@ -923,6 +1008,37 @@ pub fn main_phase(state: &mut GameState, db: &CardDatabase, verbose: bool, rng: 
                     // Put it back if we can't pay
                     state.hand.add_card(card);
                 }
+            }
+        }
+    }
+
+    // STEP 4: Marang River Regent's omen side (Coil and Catch, {3}{U} instant):
+    // draw 3, discard 1, then shuffle the card into the library. Use leftover
+    // mana for it when nothing better was castable.
+    if let Some(marang_idx) = state.hand.cards().iter()
+        .position(|c| c.name() == "Marang River Regent")
+    {
+        let omen_cost = ManaCost { blue: 1, generic: 3, ..Default::default() };
+        if mana::can_afford_cost(&omen_cost, state, None)
+            && mana::tap_lands_for_cost(&omen_cost, state, None)
+        {
+            if let Some(card) = state.hand.remove_card(marang_idx) {
+                if verbose {
+                    println!("  [Cast] Coil and Catch (omen): draw 3, discard 1");
+                }
+                for _ in 0..3 {
+                    state.draw_card();
+                }
+                if let Some(didx) = DecisionEngine::choose_discard(state) {
+                    if let Some(discarded) = state.hand.remove_card(didx) {
+                        if verbose {
+                            println!("    Discarded: {}", discarded.name());
+                        }
+                        state.graveyard.add_card(discarded);
+                    }
+                }
+                state.library.add_card(card);
+                state.library.shuffle(rng);
             }
         }
     }
@@ -1264,6 +1380,54 @@ mod tests {
         assert_eq!(damage, 10);
         // Demon dealt 6 damage with lifelink
         assert_eq!(state.life, initial_life + 6);
+    }
+
+    #[test]
+    fn test_deceit_evoke_goes_to_graveyard() {
+        let db = CardDatabase::from_file("cards.json").expect("Failed to load cards");
+        let mut state = GameState::new();
+        state.turn = 1;
+
+        let swamp = db.get_card("Swamp").expect("Swamp");
+        for _ in 0..2 {
+            state.battlefield.add_permanent(crate::game::zones::Permanent::new(swamp.clone(), 0));
+        }
+        state.hand.add_card(db.get_card("Deceit").expect("Deceit"));
+
+        let mut rng = crate::rng::GameRng::new(Some(5));
+        main_phase(&mut state, &db, false, &mut rng);
+
+        assert!(
+            state.graveyard.cards().iter().any(|c| c.name() == "Deceit"),
+            "Evoked Deceit should go straight to the graveyard"
+        );
+        assert!(state.battlefield.permanents().iter().all(|p| p.card.name() != "Deceit"));
+        assert!(state.battlefield.permanents().iter().all(|p| p.tapped), "Both Swamps tapped for evoke");
+    }
+
+    #[test]
+    fn test_deceit_evoke_with_uu_bounces_does_machines() {
+        let db = CardDatabase::from_file("cards.json").expect("Failed to load cards");
+        let mut state = GameState::new();
+        state.turn = 2;
+
+        let island = db.get_card("Island").expect("Island");
+        for _ in 0..2 {
+            state.battlefield.add_permanent(crate::game::zones::Permanent::new(island.clone(), 1));
+        }
+        state.battlefield.add_permanent(crate::game::zones::Permanent::new(
+            db.get_card("Does Machines").expect("Does Machines"), 1));
+        state.hand.add_card(db.get_card("Deceit").expect("Deceit"));
+
+        let mut rng = crate::rng::GameRng::new(Some(5));
+        main_phase(&mut state, &db, false, &mut rng);
+
+        assert!(state.graveyard.cards().iter().any(|c| c.name() == "Deceit"));
+        assert!(
+            state.hand.cards().iter().any(|c| c.name() == "Does Machines"),
+            "Deceit evoked with UU should bounce Does Machines to hand"
+        );
+        assert!(state.battlefield.permanents().iter().all(|p| p.card.name() != "Does Machines"));
     }
 
     #[test]

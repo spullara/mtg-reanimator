@@ -8,19 +8,22 @@ fn count_lands(hand: &[Card]) -> usize {
         .count()
 }
 
-/// Check if a card is a mill/surveil enabler
+/// Check if a card is a mill/surveil/graveyard enabler
 fn is_mill_enabler(card: &Card) -> bool {
     let name = card.name();
     matches!(
         name,
-        "Stitcher's Supplier"
-            | "Teachings of the Kirin"
-            | "Town Greeter"
+        "Town Greeter"
             | "Overlord of the Balemurk"
             | "Kiora, the Rising Tide"
             | "Cache Grab"
             | "Dredger's Insight"
             | "Awaken the Honored Dead"
+            | "Dark Matter Manipulator"
+            | "Does Machines"
+            | "Fear of Missing Out"
+            | "Beseech the Mirror"
+            | "Bitter Triumph"
     )
 }
 

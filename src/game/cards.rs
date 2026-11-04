@@ -17,6 +17,10 @@ pub fn intern_card_name(name: &str) -> &'static str {
         "Dredger's Insight" => "Dredger's Insight",
         "Town Greeter" => "Town Greeter",
         "Formidable Speaker" => "Formidable Speaker",
+        "Dark Matter Manipulator" => "Dark Matter Manipulator",
+        "Valgavoth, Terror Eater" => "Valgavoth, Terror Eater",
+        "Marang River Regent" => "Marang River Regent",
+        "Deceit" => "Deceit",
         // Fallback: leak the string to get a static reference
         // This is acceptable because card names are a small, fixed set
         _ => Box::leak(name.to_string().into_boxed_str()),
@@ -196,6 +200,7 @@ fn choose_passage_color(state: &GameState) -> String {
     let mut has_blue = false;
     let mut has_black = false;
     let mut has_green = false;
+    let mut has_red = false;
 
     for perm in state.battlefield.permanents() {
         if perm.tapped {
@@ -207,6 +212,7 @@ fn choose_passage_color(state: &GameState) -> String {
                     ManaColor::Blue => has_blue = true,
                     ManaColor::Black => has_black = true,
                     ManaColor::Green => has_green = true,
+                    ManaColor::Red => has_red = true,
                     _ => {}
                 }
             }
@@ -217,6 +223,7 @@ fn choose_passage_color(state: &GameState) -> String {
     let mut needs_blue = false;
     let mut needs_black = false;
     let mut needs_green = false;
+    let mut needs_red = false;
 
     for card in state.hand.cards() {
         let cost = card_mana_cost(card);
@@ -229,6 +236,9 @@ fn choose_passage_color(state: &GameState) -> String {
         if cost.green > 0 {
             needs_green = true;
         }
+        if cost.red > 0 {
+            needs_red = true;
+        }
     }
 
     // Priority: Fill missing colors for castable spells
@@ -238,6 +248,8 @@ fn choose_passage_color(state: &GameState) -> String {
         return "U".to_string();
     } else if needs_black && !has_black {
         return "B".to_string();
+    } else if needs_red && !has_red {
+        return "R".to_string();
     } else if !has_blue {
         // Default: prioritize blue for Spider-Man and Kiora
         return "U".to_string();
@@ -278,7 +290,7 @@ pub fn cast_creature(
 pub fn cast_spell(
     state: &mut GameState,
     card: &Card,
-    _db: &CardDatabase,
+    db: &CardDatabase,
     verbose: bool,
     rng: &mut crate::rng::GameRng,
 ) -> Result<(), String> {
@@ -326,6 +338,41 @@ pub fn cast_spell(
                                 state.graveyard.add_card(card);
                             }
                         }
+                    }
+                    "discard_outlet_removal" => {
+                        // Bitter Triumph: additional cost is discard a card or pay 3 life.
+                        // Use it as a discard outlet (bin a reanimation target), or pay
+                        // the cost with a blank / 3 life when we only want the self-kill.
+                        let discard_idx = DecisionEngine::reanimation_target_in_hand(state)
+                            .or_else(|| DecisionEngine::choose_blank_discard(state));
+                        if let Some(idx) = discard_idx {
+                            if let Some(discarded) = state.hand.remove_card(idx) {
+                                if verbose {
+                                    println!("    Bitter Triumph: discarded {}", discarded.name());
+                                }
+                                state.graveyard.add_card(discarded);
+                            }
+                        } else {
+                            state.life -= 3;
+                            if verbose {
+                                println!("    Bitter Triumph: paid 3 life");
+                            }
+                        }
+
+                        // It may destroy one of OUR creatures to put it into the
+                        // graveyard, when the combo needs a creature there
+                        if let Some(idx) = bitter_triumph_self_kill_target(state) {
+                            if let Some(perm) = state.battlefield.remove_permanent(idx) {
+                                if verbose {
+                                    println!("    Bitter Triumph: destroyed own {} (graveyard fodder)", perm.card.name());
+                                }
+                                state.graveyard.add_card(perm.card);
+                            }
+                        }
+                    }
+                    "bargain_tutor" => {
+                        // Beseech the Mirror
+                        resolve_beseech(state, db, rng, verbose);
                     }
                     "search_land_or_creature_with_evidence" => {
                         // Analyze the Pollen: evidence 8 (total mana value), search for creature/land
@@ -530,6 +577,34 @@ pub fn cast_spell(
                         // Dredger's Insight: gain life when leaving graveyard
                         // This is a triggered ability, handled elsewhere
                     }
+                    "etb_mill_2_draw_2_discard_2" => {
+                        // Does Machines: mill 2, draw 2, then discard 2
+                        resolve_mill_n(state, 2, verbose);
+
+                        let hand_before = state.hand.size();
+                        state.draw_card();
+                        state.draw_card();
+                        if verbose {
+                            let drawn: Vec<&str> = state.hand.cards().iter()
+                                .skip(hand_before)
+                                .map(|c| c.name())
+                                .collect();
+                            println!("    Does Machines: drew {}", drawn.join(", "));
+                        }
+
+                        let mut discarded: Vec<String> = Vec::new();
+                        for _ in 0..2 {
+                            if let Some(idx) = DecisionEngine::choose_discard(state) {
+                                if let Some(card) = state.hand.remove_card(idx) {
+                                    discarded.push(card.name().to_string());
+                                    state.graveyard.add_card(card);
+                                }
+                            }
+                        }
+                        if verbose && !discarded.is_empty() {
+                            println!("    Does Machines: discarded {}", discarded.join(", "));
+                        }
+                    }
                     _ => {}
                 }
             }
@@ -627,6 +702,19 @@ pub fn process_etb_triggers_verbose(
             "etb_draw_2_discard_2" => {
                 // Kiora: draw 2, discard 2 - use the proper priority logic
                 resolve_kiora_etb(state, verbose);
+            }
+            "etb_mill_3" => {
+                // Dark Matter Manipulator: mill 3
+                resolve_mill_n(state, 3, verbose);
+            }
+            "etb_discard_1_draw_1" => {
+                // Fear of Missing Out: discard 1, then draw 1
+                resolve_fear_of_missing_out_etb(state, verbose);
+            }
+            "etb_bounce_up_to_two" => {
+                // Marang River Regent: return up to two other nonland permanents
+                // to hand (bounce our own ETB-value permanents to recast them)
+                resolve_bounce_recast_targets(state, 2, verbose);
             }
             "etb_discard_tutor_creature" => {
                 // Formidable Speaker: may discard a card to tutor a creature
@@ -794,9 +882,11 @@ pub fn process_etb_triggers_verbose(
 
                 if spider_man_in_hand >= 1 {
                     // We have another Spider-Man - copy a mill creature to dig for Bringer
-                    // Priority: Overlord of the Balemurk > Kiora > Town Greeter
+                    // Priority: Overlord of the Balemurk > Dark Matter Manipulator > Kiora > Town Greeter
                     let mill_creature = state.graveyard.cards().iter()
                         .position(|c| c.name() == "Overlord of the Balemurk")
+                        .or_else(|| state.graveyard.cards().iter()
+                            .position(|c| c.name() == "Dark Matter Manipulator"))
                         .or_else(|| state.graveyard.cards().iter()
                             .position(|c| c.name() == "Kiora, the Rising Tide"))
                         .or_else(|| state.graveyard.cards().iter()
@@ -822,6 +912,10 @@ pub fn process_etb_triggers_verbose(
                                 // Mill 4, return a permanent
                                 resolve_overlord_etb(state, verbose);
                             }
+                            "Dark Matter Manipulator" => {
+                                // Mill 3
+                                resolve_mill_n(state, 3, verbose);
+                            }
                             "Kiora, the Rising Tide" => {
                                 // Draw 2, discard 2
                                 resolve_kiora_etb(state, verbose);
@@ -832,8 +926,31 @@ pub fn process_etb_triggers_verbose(
                             }
                             _ => {}
                         }
-                    } else if verbose {
-                        println!("    Spider-Man enters as a 4/4 (no good copy target, but have another Spider-Man)");
+                        return Ok(());
+                    }
+                }
+
+                // Priority 4: Fallback copy targets - prefer the one that helps most:
+                // Marang (bounce ETB) > Valgavoth (Demon, Ardyn haste) > Deceit
+                let fallback_idx = state.graveyard.cards().iter()
+                    .position(|c| c.name() == "Marang River Regent"
+                        && !DecisionEngine::choose_bounce_targets(state, 1).is_empty())
+                    .or_else(|| state.graveyard.cards().iter()
+                        .position(|c| c.name() == "Valgavoth, Terror Eater"))
+                    .or_else(|| state.graveyard.cards().iter()
+                        .position(|c| c.name() == "Deceit"));
+
+                if let Some(idx) = fallback_idx {
+                    let creature_name = state.graveyard.cards()[idx].name().to_string();
+                    if verbose {
+                        println!("    Spider-Man copies {} (fallback target)", creature_name);
+                    }
+                    permanent.is_copy_of = Some(intern_card_name(&creature_name));
+                    if let Some(creature) = state.graveyard.remove_card(idx) {
+                        state.exile.add_card(creature);
+                    }
+                    if creature_name == "Marang River Regent" {
+                        resolve_bounce_recast_targets(state, 2, verbose);
                     }
                 } else if verbose {
                     println!("    Spider-Man enters as a 4/4 (no good copy target)");
@@ -977,6 +1094,15 @@ pub fn resolve_bringer_etb(state: &mut GameState, rng: &mut crate::rng::GameRng,
             "Formidable Speaker" => {
                 resolve_formidable_speaker_etb(state, rng, verbose);
             }
+            "Dark Matter Manipulator" => {
+                resolve_mill_n(state, 3, verbose);
+            }
+            "Fear of Missing Out" => {
+                resolve_fear_of_missing_out_etb(state, verbose);
+            }
+            "Marang River Regent" => {
+                resolve_bounce_recast_targets(state, 2, verbose);
+            }
             _ => {}
         }
     }
@@ -1057,6 +1183,9 @@ pub fn resolve_surveil(state: &mut GameState, count: usize, verbose: bool) {
             let put_in_graveyard = card_name == "Bringer of the Last Gift"
                 || card_name == "Terror of the Peaks"
                 || card_name == "Overlord of the Balemurk"
+                || card_name == "Valgavoth, Terror Eater"
+                || card_name == "Marang River Regent"
+                || card_name == "Deceit"
                 || (card_name == "Kiora, the Rising Tide" && has_kiora_in_hand)
                 || card_name == "Town Greeter"; // Cheap 1/1, better to reanimate than draw
 
@@ -1218,17 +1347,9 @@ pub fn resolve_town_greeter_etb(state: &mut GameState, verbose: bool) {
     }
 }
 
-/// Resolve Kiora's ETB ability: draw 2, discard 2
-///
-/// EXACT LOGIC FROM TYPESCRIPT:
-/// - Draw 2 cards first
-/// - Then discard 2 cards with 5-priority system:
-///   1. Bringer of the Last Gift
-///   2. Terror of the Peaks
-///   3. Ardyn, the Usurper (8 mana - want to reanimate, not cast)
-///   4. Excess lands (only if > 2 lands in hand)
-///   5. Last card in hand
-/// - Each discard iteration searches for the best card independently
+/// Resolve Kiora's ETB ability: draw 2, discard 2.
+/// Discards use the shared DecisionEngine::choose_discard priority
+/// (reanimation targets first, then blanks, then the last non-Spider-Man card).
 pub fn resolve_kiora_etb(state: &mut GameState, verbose: bool) {
     // Draw 2, discard 2
     let hand_before = state.hand.size();
@@ -1246,69 +1367,270 @@ pub fn resolve_kiora_etb(state: &mut GameState, verbose: bool) {
         println!("    Kiora ETB: drew {}", drawn.join(", "));
     }
 
-    // Discard 2 - prioritize discarding Bringer/Terror
+    // Discard 2 - shared priority: reanimation targets first, then blanks
     let mut discarded: Vec<String> = Vec::new();
     for _ in 0..2 {
-        if state.hand.size() == 0 {
-            break;
-        }
-
-        // Find best card to discard
-        let mut to_discard_idx: Option<usize> = None;
-
-        // Priority 1: Bringer of the Last Gift
-        if to_discard_idx.is_none() {
-            to_discard_idx = state.hand.cards()
-                .iter()
-                .position(|c| c.name() == "Bringer of the Last Gift");
-        }
-
-        // Priority 2: Terror of the Peaks
-        if to_discard_idx.is_none() {
-            to_discard_idx = state.hand.cards()
-                .iter()
-                .position(|c| c.name() == "Terror of the Peaks");
-        }
-
-        // Priority 3: Ardyn, the Usurper (8 mana - want to reanimate, not cast)
-        if to_discard_idx.is_none() {
-            to_discard_idx = state.hand.cards()
-                .iter()
-                .position(|c| c.name() == "Ardyn, the Usurper");
-        }
-
-        // Priority 4: Excess lands (only if > 2 lands in hand)
-        if to_discard_idx.is_none() {
-            let lands: Vec<usize> = state.hand.cards()
-                .iter()
-                .enumerate()
-                .filter(|(_, c)| matches!(c, Card::Land(_)))
-                .map(|(i, _)| i)
-                .collect();
-            if lands.len() > 2 {
-                // Take the last land
-                to_discard_idx = lands.last().copied();
-            }
-        }
-
-        // Priority 5: Last card in hand
-        if to_discard_idx.is_none() {
-            to_discard_idx = Some(state.hand.size() - 1);
-        }
-
-        // Discard the card
-        if let Some(idx) = to_discard_idx {
+        if let Some(idx) = DecisionEngine::choose_discard(state) {
             if let Some(card) = state.hand.remove_card(idx) {
                 let card_name = card.name().to_string();
                 state.graveyard.add_card(card);
                 discarded.push(card_name);
             }
+        } else {
+            break;
         }
     }
 
     if verbose {
         println!("    Kiora ETB: discarded {}", discarded.join(", "));
     }
+}
+
+/// Mill N cards straight into the graveyard
+pub fn resolve_mill_n(state: &mut GameState, count: usize, verbose: bool) {
+    let milled = state.library.mill(count);
+    if verbose && !milled.is_empty() {
+        let names: Vec<&str> = milled.iter().map(|c| c.name()).collect();
+        println!("    Mill {}: {}", count, names.join(", "));
+    }
+    for card in milled {
+        state.graveyard.add_card(card);
+    }
+}
+
+/// Resolve Fear of Missing Out ETB: discard a card, then draw a card
+pub fn resolve_fear_of_missing_out_etb(state: &mut GameState, verbose: bool) {
+    if let Some(idx) = DecisionEngine::choose_discard(state) {
+        if let Some(card) = state.hand.remove_card(idx) {
+            if verbose {
+                println!("    Fear of Missing Out: discarded {}", card.name());
+            }
+            state.graveyard.add_card(card);
+        }
+    }
+    if state.draw_card() {
+        if verbose {
+            if let Some(card) = state.hand.cards().last() {
+                println!("    Fear of Missing Out: drew {}", card.name());
+            }
+        }
+    }
+}
+
+/// Bounce up to `max` of our own ETB-value permanents back to hand so they can
+/// be recast (Does Machines, impending Overlord, fresh Fear of Missing Out)
+pub fn resolve_bounce_recast_targets(state: &mut GameState, max: usize, verbose: bool) {
+    let mut indices = DecisionEngine::choose_bounce_targets(state, max);
+    // Remove from the highest index first so earlier indices stay valid
+    indices.sort_by(|a, b| b.cmp(a));
+    for idx in indices {
+        if let Some(perm) = state.battlefield.remove_permanent(idx) {
+            if verbose {
+                println!("    Bounced {} to hand (recast it for its ETB)", perm.card.name());
+            }
+            state.hand.add_card(perm.card);
+        }
+    }
+}
+
+/// Bitter Triumph may destroy one of OUR creatures to put it into the graveyard.
+/// Only do this when the combo needs a creature there: Ardyn is in the graveyard
+/// with no other creature (Starscourge needs fodder). Pick a spare creature whose
+/// ETB already resolved.
+fn bitter_triumph_self_kill_target(state: &GameState) -> Option<usize> {
+    let has_ardyn_in_gy = state.graveyard.cards().iter()
+        .any(|c| c.name() == "Ardyn, the Usurper");
+    let other_creatures_in_gy = state.graveyard.cards().iter()
+        .filter(|c| matches!(c, Card::Creature(_)) && c.name() != "Ardyn, the Usurper")
+        .count();
+    if !has_ardyn_in_gy || other_creatures_in_gy > 0 {
+        return None;
+    }
+
+    const SPARE_CREATURES: &[&str] = &["Dark Matter Manipulator", "Fear of Missing Out"];
+    state.battlefield.permanents().iter().position(|p| {
+        SPARE_CREATURES.contains(&p.card.name()) && p.is_copy_of.is_none()
+    })
+}
+
+/// Bargain fodder for Beseech the Mirror, best first.
+/// Enchantment creatures are the best bargain because the mass reanimate returns
+/// them: an impending Overlord (sacrificing it even upgrades it to a full
+/// creature), then Fear of Missing Out, then a flipped Overlord. Sacrifice Does
+/// Machines only when no enchantment creature is available.
+pub fn beseech_bargain_fodder(state: &GameState) -> Option<usize> {
+    let perms = state.battlefield.permanents();
+    if let Some(i) = perms.iter().position(|p| {
+        p.card.name() == "Overlord of the Balemurk"
+            && p.get_counter(CounterType::Time) > 0
+            && p.is_copy_of.is_none()
+    }) {
+        return Some(i);
+    }
+    if let Some(i) = perms.iter().position(|p| {
+        p.card.name() == "Fear of Missing Out" && p.is_copy_of.is_none()
+    }) {
+        return Some(i);
+    }
+    if let Some(i) = perms.iter().position(|p| {
+        p.card.name() == "Overlord of the Balemurk" && p.is_copy_of.is_none()
+    }) {
+        return Some(i);
+    }
+    perms.iter().position(|p| p.card.name() == "Does Machines" && p.is_copy_of.is_none())
+}
+
+/// Decide what Beseech the Mirror would fetch right now.
+/// Returns (card name to fetch, try to free-cast it with bargain).
+fn beseech_plan(state: &GameState) -> Option<(&'static str, bool)> {
+    let in_hand = |name: &str| state.hand.cards().iter().any(|c| c.name() == name);
+    let in_library = |name: &str| state.library.cards().iter().any(|c| c.name() == name);
+
+    let has_bringer_in_gy = state.graveyard.cards().iter()
+        .any(|c| c.name() == "Bringer of the Last Gift");
+    let has_ardyn_in_gy = state.graveyard.cards().iter()
+        .any(|c| c.name() == "Ardyn, the Usurper");
+    let other_creatures_in_gy = state.graveyard.cards().iter()
+        .filter(|c| matches!(c, Card::Creature(_)) && c.name() != "Ardyn, the Usurper")
+        .count();
+    let combo_target_in_gy = has_bringer_in_gy || (has_ardyn_in_gy && other_creatures_in_gy >= 1);
+
+    if combo_target_in_gy {
+        // Get Superior Spider-Man; free-cast it only when the combo is lethal
+        if !in_hand("Superior Spider-Man") && in_library("Superior Spider-Man") {
+            let lethal = has_bringer_in_gy && is_combo_lethal(state);
+            let can_free_cast = (lethal || (has_ardyn_in_gy && !has_bringer_in_gy))
+                && beseech_bargain_fodder(state).is_some();
+            return Some(("Superior Spider-Man", can_free_cast));
+        }
+        return None;
+    }
+
+    // No target in the graveyard yet: get a discard outlet or Bringer
+    let target_in_hand = DecisionEngine::reanimation_target_in_hand(state).is_some();
+    if target_in_hand && !in_hand("Bitter Triumph") && in_library("Bitter Triumph") {
+        // Bitter Triumph is MV 2, so a bargained Beseech casts it free
+        let can_free_cast = beseech_bargain_fodder(state).is_some();
+        return Some(("Bitter Triumph", can_free_cast));
+    }
+    if !in_hand("Bringer of the Last Gift") && in_library("Bringer of the Last Gift") {
+        // MV 8: always goes to hand, so never bargain for it
+        return Some(("Bringer of the Last Gift", false));
+    }
+
+    None
+}
+
+/// Check whether casting Beseech the Mirror right now does something useful
+pub fn beseech_useful(state: &GameState) -> bool {
+    beseech_plan(state).is_some()
+}
+
+/// Resolve Beseech the Mirror: optionally bargain (sacrifice fodder), search the
+/// library for the planned card, and cast it free (MV 4 or less, bargained) or
+/// put it into hand.
+pub fn resolve_beseech(
+    state: &mut GameState,
+    db: &CardDatabase,
+    rng: &mut crate::rng::GameRng,
+    verbose: bool,
+) {
+    let Some((fetch_name, mut free_cast)) = beseech_plan(state) else {
+        if verbose {
+            println!("    Beseech the Mirror: no useful fetch");
+        }
+        return;
+    };
+
+    if free_cast {
+        if let Some(idx) = beseech_bargain_fodder(state) {
+            if let Some(perm) = state.battlefield.remove_permanent(idx) {
+                if verbose {
+                    println!("    Beseech the Mirror: bargained {} (sacrificed)", perm.card.name());
+                }
+                state.graveyard.add_card(perm.card);
+            }
+        } else {
+            free_cast = false;
+        }
+    }
+
+    let Some(lib_idx) = state.library.cards().iter().position(|c| c.name() == fetch_name) else {
+        if verbose {
+            println!("    Beseech the Mirror: {} not found in library", fetch_name);
+        }
+        return;
+    };
+    let card = state.library.cards_mut().remove(lib_idx);
+    state.library.shuffle(rng);
+
+    if free_cast && card.mana_value() <= 4 {
+        if verbose {
+            println!("    Beseech the Mirror: casts {} for free!", card.name());
+        }
+        match &card {
+            Card::Creature(_) => {
+                let _ = cast_creature(state, &card, false);
+
+                // Process ETB triggers (same dance as the engine)
+                let perm_idx = state.battlefield.permanents().len().saturating_sub(1);
+                if perm_idx < state.battlefield.permanents().len() {
+                    let mut perm = state.battlefield.permanents_mut()[perm_idx].clone();
+                    let perm_name = perm.card.name().to_string();
+                    let perm_turn = perm.turn_entered;
+                    let _ = process_etb_triggers_verbose(state, &mut perm, db, verbose, rng);
+
+                    if let Some(idx) = state.battlefield.permanents().iter().position(|p| {
+                        p.card.name() == perm_name && p.turn_entered == perm_turn
+                    }) {
+                        state.battlefield.permanents_mut()[idx] = perm;
+                    }
+                }
+            }
+            Card::Land(_) => {
+                // Should not happen (we never fetch lands); keep it in hand
+                state.hand.add_card(card);
+            }
+            _ => {
+                let _ = cast_spell(state, &card, db, verbose, rng);
+            }
+        }
+    } else {
+        if verbose {
+            println!("    Beseech the Mirror: put {} into hand", card.name());
+        }
+        state.hand.add_card(card);
+    }
+}
+
+/// Deceit's evoke cost is {U/B}{U/B}. Pick how to pay it: prefer {U}{U} when a
+/// bounce target exists (the blue ETB mode returns one of our own permanents to
+/// hand), otherwise any affordable mix. Returns (cost, bounce).
+pub fn deceit_evoke_payment(state: &GameState) -> (ManaCost, bool) {
+    let uu = ManaCost { blue: 2, ..Default::default() };
+    let has_bounce_target = !DecisionEngine::choose_bounce_targets(state, 1).is_empty();
+    if has_bounce_target && crate::game::mana::can_afford_cost(&uu, state, None) {
+        return (uu, true);
+    }
+
+    let bb = ManaCost { black: 2, ..Default::default() };
+    let ub = ManaCost { blue: 1, black: 1, ..Default::default() };
+    for cost in [bb.clone(), ub, uu] {
+        if crate::game::mana::can_afford_cost(&cost, state, None) {
+            return (cost, false);
+        }
+    }
+    (bb, false)
+}
+
+/// Check whether Deceit can be evoked right now ({U/B}{U/B} in any mix)
+pub fn can_afford_deceit_evoke(state: &GameState) -> bool {
+    let costs = [
+        ManaCost { black: 2, ..Default::default() },
+        ManaCost { blue: 1, black: 1, ..Default::default() },
+        ManaCost { blue: 2, ..Default::default() },
+    ];
+    costs.iter().any(|c| crate::game::mana::can_afford_cost(c, state, None))
 }
 
 /// Resolve Formidable Speaker's ETB ability
@@ -2149,3 +2471,122 @@ mod combo_damage_tests {
     }
 }
 
+
+#[cfg(test)]
+mod new_card_tests {
+    use super::*;
+    use crate::card::CardDatabase;
+    use crate::game::zones::Permanent;
+    use crate::rng::GameRng;
+
+    fn load_db() -> CardDatabase {
+        CardDatabase::from_file("cards.json").expect("Failed to load cards")
+    }
+
+    #[test]
+    fn test_dark_matter_manipulator_etb_mills_3() {
+        let db = load_db();
+        let mut state = GameState::new();
+        state.turn = 1;
+        for _ in 0..5 {
+            state.library.add_card(db.get_card("Forest").expect("Forest"));
+        }
+
+        let dmm = db.get_card("Dark Matter Manipulator").expect("DMM");
+        let mut perm = Permanent::new(dmm, 1);
+        state.battlefield.add_permanent(perm.clone());
+
+        let mut rng = GameRng::new(Some(7));
+        process_etb_triggers_verbose(&mut state, &mut perm, &db, false, &mut rng)
+            .expect("ETB should resolve");
+
+        assert_eq!(state.graveyard.cards().len(), 3, "DMM should mill 3");
+        assert_eq!(state.library.size(), 2);
+    }
+
+    #[test]
+    fn test_does_machines_loots_and_discards_bringer() {
+        let db = load_db();
+        let mut state = GameState::new();
+        state.turn = 1;
+        for _ in 0..6 {
+            state.library.add_card(db.get_card("Forest").expect("Forest"));
+        }
+        state.hand.add_card(db.get_card("Bringer of the Last Gift").expect("Bringer"));
+
+        let does_machines = db.get_card("Does Machines").expect("Does Machines");
+        let mut rng = GameRng::new(Some(3));
+        cast_spell(&mut state, &does_machines, &db, false, &mut rng)
+            .expect("cast should resolve");
+
+        // Mill 2, draw 2, then discard 2 (Bringer is the top discard priority)
+        assert!(
+            state.graveyard.cards().iter().any(|c| c.name() == "Bringer of the Last Gift"),
+            "Bringer should be discarded to the graveyard"
+        );
+        assert_eq!(state.graveyard.cards().len(), 4, "2 milled + 2 discarded");
+        assert_eq!(state.hand.size(), 1, "1 + 2 drawn - 2 discarded");
+        assert!(state.battlefield.permanents().iter().any(|p| p.card.name() == "Does Machines"));
+    }
+
+    #[test]
+    fn test_bitter_triumph_discards_bringer() {
+        let db = load_db();
+        let mut state = GameState::new();
+        state.turn = 2;
+        state.hand.add_card(db.get_card("Bringer of the Last Gift").expect("Bringer"));
+        state.hand.add_card(db.get_card("Forest").expect("Forest"));
+
+        let bitter = db.get_card("Bitter Triumph").expect("Bitter Triumph");
+        let mut rng = GameRng::new(Some(3));
+        cast_spell(&mut state, &bitter, &db, false, &mut rng).expect("cast should resolve");
+
+        assert!(
+            state.graveyard.cards().iter().any(|c| c.name() == "Bringer of the Last Gift"),
+            "Bringer should be discarded as the additional cost"
+        );
+        assert!(state.graveyard.cards().iter().any(|c| c.name() == "Bitter Triumph"));
+        assert_eq!(state.hand.size(), 1, "Forest stays in hand");
+        assert_eq!(state.life, 20, "No life paid when a discard is available");
+    }
+
+    #[test]
+    fn test_beseech_bargained_casts_spider_man_free() {
+        let db = load_db();
+        let mut state = GameState::new();
+        state.turn = 3;
+        state.opponent_life = 5;
+
+        // Combo is ready in the graveyard and lethal (estimated 6 damage)
+        state.graveyard.add_card(db.get_card("Bringer of the Last Gift").expect("Bringer"));
+        state.graveyard.add_card(db.get_card("Terror of the Peaks").expect("Terror"));
+
+        // Bargain fodder on the battlefield
+        state.battlefield.add_permanent(Permanent::new(
+            db.get_card("Does Machines").expect("Does Machines"), 2));
+
+        // Spider-Man is in the library
+        state.library.add_card(db.get_card("Superior Spider-Man").expect("Spidey"));
+        for _ in 0..4 {
+            state.library.add_card(db.get_card("Forest").expect("Forest"));
+        }
+
+        let beseech = db.get_card("Beseech the Mirror").expect("Beseech");
+        let mut rng = GameRng::new(Some(11));
+        cast_spell(&mut state, &beseech, &db, false, &mut rng).expect("cast should resolve");
+
+        // Does Machines was sacrificed for bargain
+        assert!(state.battlefield.permanents().iter().all(|p| p.card.name() != "Does Machines"));
+        assert!(state.graveyard.cards().iter().any(|c| c.name() == "Does Machines"));
+
+        // Spider-Man was cast for free and copied Bringer (combo fired)
+        let spidey = state.battlefield.permanents().iter()
+            .find(|p| p.card.name() == "Superior Spider-Man")
+            .expect("Spider-Man should be on the battlefield");
+        assert_eq!(spidey.is_copy_of, Some("Bringer of the Last Gift"));
+
+        // Terror was mass-reanimated
+        assert!(state.battlefield.permanents().iter().any(|p| p.card.name() == "Terror of the Peaks"));
+        assert!(state.library.cards().iter().all(|c| c.name() != "Superior Spider-Man"));
+    }
+}
