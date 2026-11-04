@@ -52,11 +52,6 @@ impl GameRng {
         self.mulberry.next()
     }
 
-    /// Generate a random integer in range [0, max)
-    pub fn random_range(&mut self, max: usize) -> usize {
-        (self.random() * max as f64).floor() as usize
-    }
-
     /// Fisher-Yates shuffle for a mutable slice
     /// Matches TypeScript's shuffle exactly
     pub fn shuffle<T>(&mut self, array: &mut [T]) {
@@ -109,15 +104,6 @@ mod tests {
         rng2.shuffle(&mut arr2);
 
         assert_eq!(arr1, arr2, "Same seed should produce same shuffle");
-    }
-
-    #[test]
-    fn test_random_range() {
-        let mut rng = GameRng::new(Some(123));
-        for _ in 0..1000 {
-            let val = rng.random_range(10);
-            assert!(val < 10, "random_range should be in [0, max)");
-        }
     }
 
     #[test]

@@ -1,0 +1,15 @@
+# Land pool for the Roiling Dragonstorm U/B list (deck_v_roiling_2swamp.txt)
+# Format: <count-min> <count-max> <Land name>
+# Cavern of Souls and Pit of Offerings are fixed by user choice (min = max):
+# their real value (protection against counterspells, graveyard hate) is not
+# in the model, so the optimizer must not cut them.
+0 4 Watery Grave
+0 4 Undercity Sewers
+0 4 Gloomlake Verge
+0 4 Shipwreck Marsh
+0 4 Multiversal Passage
+0 4 Starting Town
+0 8 Swamp
+0 4 Island
+2 2 Cavern of Souls
+1 1 Pit of Offerings

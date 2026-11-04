@@ -66,23 +66,33 @@ enum Commands {
         num_games: usize,
     },
 
-    /// Optimize land configuration
+    /// Optimize land configuration (3 stages: random search, top-10 retest, local search)
     Optimize {
-        /// Number of random configurations to test
-        #[arg(short, long, default_value = "100")]
+        /// Number of random configurations to test in stage 1
+        #[arg(short, long, default_value = "200")]
         configs: usize,
 
-        /// Number of games per configuration
-        #[arg(short, long, default_value = "1000")]
+        /// Number of games per configuration in stage 1
+        #[arg(short, long, default_value = "2000")]
         games: usize,
-
-        /// Strategy for generating land configurations: "weighted" or "shuffle"
-        #[arg(short, long, default_value = "weighted")]
-        strategy: String,
 
         /// Base deck file to use for fixed cards (lands will be replaced)
         #[arg(short, long, default_value = "deck.txt")]
         deck: String,
+
+        /// Land pool file: lines '<count-min> <count-max> <Land name>'.
+        /// Without this flag, the built-in pool for the old U/B/G deck is used.
+        #[arg(short, long)]
+        pool: Option<String>,
+
+        /// Base seed. Game i of every configuration uses seed base+i,
+        /// so all configurations play the same shuffles and results repeat.
+        #[arg(short, long, default_value = "1")]
+        seed: u64,
+
+        /// Output deck file name (default: deck_<hash>.txt)
+        #[arg(short, long)]
+        out: Option<String>,
     },
 
     /// Analyze turn 4 combo failure reasons
@@ -147,8 +157,8 @@ fn main() {
         }) => {
             compare_decks(&db, &deck1, &deck2, num_games);
         }
-        Some(Commands::Optimize { configs, games, strategy, deck }) => {
-            optimize_lands(&db, configs, games, &strategy, &deck);
+        Some(Commands::Optimize { configs, games, deck, pool, seed, out }) => {
+            optimize_lands(&db, configs, games, &deck, pool.as_deref(), seed, out);
         }
         Some(Commands::Analyze { num_games, deck, seed }) => {
             analyze_turn4_failures(&db, &deck, num_games, seed);
@@ -417,17 +427,39 @@ fn compare_decks(db: &CardDatabase, deck1_file: &str, deck2_file: &str, num_game
     println!("\nCompleted in {:.2?}", elapsed);
 }
 
-fn optimize_lands(db: &CardDatabase, num_configs: usize, games_per_config: usize, strategy: &str, deck_file: &str) {
-    use simulation::optimize::{generate_random_land_config_weighted, generate_random_land_config_shuffle, build_deck_from_config_with_fixed, config_to_string, save_deck_to_file, DeckSaveParams, extract_fixed_cards_from_deck};
+fn optimize_lands(
+    db: &CardDatabase,
+    num_configs: usize,
+    games_per_config: usize,
+    deck_file: &str,
+    pool_file: Option<&str>,
+    base_seed: u64,
+    out_file: Option<String>,
+) {
+    use simulation::optimize::{
+        default_land_types, parse_pool_file, generate_random_land_config,
+        evaluate_config, neighbor_swaps, config_to_string, calculate_deck_hash_with_fixed,
+        parse_set_codes, save_deck_to_file, DeckSaveParams, extract_fixed_cards_from_deck,
+        EvalResult, LandConfig, TOTAL_LANDS,
+    };
     use crate::rng::GameRng;
 
-    let strategy_desc = match strategy {
-        "weighted" => "Random counts for each land type, respecting max limits",
-        "shuffle" => "Pool of max copies shuffled, take first 24",
-        _ => {
-            eprintln!("Unknown strategy '{}'. Use 'weighted' or 'shuffle'.", strategy);
-            return;
-        }
+    const STAGE2_GAMES: usize = 50_000;
+    const STAGE3_GAMES: usize = 20_000;
+    const FINAL_GAMES: usize = 50_000;
+    const STAGE2_TOP: usize = 10;
+    const IMPROVE_THRESHOLD: f64 = 0.01;
+
+    // Land pool: from --pool file, or the built-in default pool
+    let pool = match pool_file {
+        Some(path) => match parse_pool_file(path) {
+            Ok(pool) => pool,
+            Err(e) => {
+                eprintln!("✗ {}", e);
+                return;
+            }
+        },
+        None => default_land_types(),
     };
 
     // Extract fixed (non-land) cards from the deck file
@@ -438,136 +470,157 @@ fn optimize_lands(db: &CardDatabase, num_configs: usize, games_per_config: usize
             return;
         }
     };
-
     let fixed_card_count: usize = fixed_cards.iter().map(|(_, count)| count).sum();
 
-    println!("\n=== MTG Land Optimization ===\n");
-    println!("Base deck: {}", deck_file);
-    println!("Strategy: {}", strategy);
-    println!("  - {}\n", strategy_desc);
-    println!("Testing {} random land configurations", num_configs);
-    println!("Running {} games per configuration...\n", games_per_config);
-    println!("Fixed non-land cards: {} cards", fixed_card_count);
-    println!("Land slots to fill: 24 cards\n");
+    println!("\n=== MTG Land Optimization (3 stages) ===\n");
+    println!("Base deck: {} ({} fixed non-land cards + {} land slots)", deck_file, fixed_card_count, TOTAL_LANDS);
+    match pool_file {
+        Some(path) => println!("Land pool: {} ({} land types)", path, pool.len()),
+        None => println!("Land pool: built-in default ({} land types)", pool.len()),
+    }
+    println!("Seed base: {} (game i uses seed {}+i for every configuration)", base_seed, base_seed);
 
-    let mut best_config = None;
-    let mut best_avg_turn = f64::INFINITY;
-    let mut best_win_rate = 0.0;
-    let mut best_turn_distribution: HashMap<u32, usize> = HashMap::new();
-    let mut all_results: Vec<(simulation::optimize::LandConfig, f64, f64)> = Vec::new();
+    let eval = |config: &LandConfig, games: usize| -> Option<EvalResult> {
+        match evaluate_config(config, &fixed_cards, db, games, base_seed) {
+            Ok(r) => Some(r),
+            Err(e) => {
+                eprintln!("Error evaluating config: {}", e);
+                None
+            }
+        }
+    };
 
     let start = std::time::Instant::now();
 
+    // --- Stage 1: random search ---
+    println!("\n--- Stage 1: {} random configurations at {} games each ---\n", num_configs, games_per_config);
+    let mut config_rng = GameRng::new(Some(base_seed));
+    let mut stage1: Vec<(LandConfig, EvalResult)> = Vec::new();
+    let mut seen: std::collections::HashSet<String> = std::collections::HashSet::new();
+
     for i in 0..num_configs {
-        // Generate random land configuration using selected strategy
-        let mut rng = GameRng::new(None);
-        let config = match strategy {
-            "shuffle" => generate_random_land_config_shuffle(&mut rng),
-            _ => generate_random_land_config_weighted(&mut rng),
-        };
-
-        // Build deck from config using the fixed cards from the deck file
-        let deck = match build_deck_from_config_with_fixed(&config, &fixed_cards, db) {
-            Ok(d) => d,
-            Err(e) => {
-                eprintln!("Error building deck: {}", e);
-                continue;
-            }
-        };
-
-        // Run games with this configuration
-        let deck_results: Vec<_> = (0..games_per_config)
-            .into_par_iter()
-            .map(|j| {
-                let seed = (std::time::SystemTime::now()
-                    .duration_since(std::time::UNIX_EPOCH)
-                    .unwrap()
-                    .as_nanos() as u64)
-                    .wrapping_add(j as u64);
-                run_game(&deck, seed, db, false)
-            })
-            .collect();
-
-        let wins: Vec<_> = deck_results.iter().filter(|r| r.win_turn.is_some()).collect();
-        let win_rate = wins.len() as f64 / games_per_config as f64;
-        let avg_win_turn = if !wins.is_empty() {
-            wins.iter().map(|r| r.win_turn.unwrap() as f64).sum::<f64>() / wins.len() as f64
-        } else {
-            f64::INFINITY
-        };
-
-        all_results.push((config.clone(), win_rate, avg_win_turn));
-
-        // Track best configuration
-        if avg_win_turn > 0.0 && avg_win_turn < best_avg_turn {
-            best_config = Some(config.clone());
-            best_avg_turn = avg_win_turn;
-            best_win_rate = win_rate;
-
-            // Build turn distribution for the new best config
-            best_turn_distribution.clear();
-            for result in &wins {
-                if let Some(turn) = result.win_turn {
-                    *best_turn_distribution.entry(turn).or_insert(0) += 1;
-                }
-            }
-
-            println!("[{}/{}] New best! Avg turn: {:.3}, Win rate: {:.1}%",
-                i + 1, num_configs, best_avg_turn, best_win_rate * 100.0);
-            println!("  Lands: {}\n", config_to_string(&config));
+        let config = generate_random_land_config(&pool, &mut config_rng);
+        if !seen.insert(calculate_deck_hash_with_fixed(&config, &fixed_cards)) {
+            continue; // duplicate configuration, skip
         }
+        let Some(result) = eval(&config, games_per_config) else { continue };
+        stage1.push((config, result));
 
-        // Progress update every 100 configs
-        if (i + 1) % 100 == 0 {
+        if (i + 1) % 20 == 0 || i + 1 == num_configs {
+            let best = stage1
+                .iter()
+                .min_by(|a, b| a.1.score_cmp(&b.1))
+                .map(|(_, r)| r.avg_win_turn)
+                .unwrap_or(f64::INFINITY);
             let elapsed = start.elapsed().as_secs_f64();
             let eta = (elapsed / (i + 1) as f64) * (num_configs - i - 1) as f64;
-            println!("Progress: {}/{} ({:.1}%) - ETA: {:.0}s",
-                i + 1, num_configs, (i + 1) as f64 / num_configs as f64 * 100.0, eta);
+            println!("[{}/{}] best avg turn so far: {:.3} (elapsed {:.0}s, ETA {:.0}s)",
+                i + 1, num_configs, best, elapsed, eta);
         }
     }
+
+    if stage1.is_empty() {
+        eprintln!("No configurations could be evaluated.");
+        return;
+    }
+
+    stage1.sort_by(|a, b| a.1.score_cmp(&b.1));
+
+    // --- Stage 2: re-test the top configurations ---
+    let top_n = stage1.len().min(STAGE2_TOP);
+    println!("\n--- Stage 2: re-test top {} at {} games each ---\n", top_n, STAGE2_GAMES);
+    let mut stage2: Vec<(LandConfig, EvalResult)> = Vec::new();
+    for (i, (config, s1)) in stage1.iter().take(top_n).enumerate() {
+        let Some(result) = eval(config, STAGE2_GAMES) else { continue };
+        println!("[{}/{}] avg turn {:.3} (stage 1: {:.3}), T4+T5 {:.1}%  |  {}",
+            i + 1, top_n, result.avg_win_turn, s1.avg_win_turn, result.t45_pct(), config_to_string(config));
+        stage2.push((config.clone(), result));
+    }
+    stage2.sort_by(|a, b| a.1.score_cmp(&b.1));
+
+    let (mut current, _) = stage2[0].clone();
+
+    // --- Stage 3: local search (single swaps) ---
+    println!("\n--- Stage 3: local search from the best configuration ({} games per swap) ---", STAGE3_GAMES);
+    let Some(mut current_eval) = eval(&current, STAGE3_GAMES) else { return };
+    println!("\nStart: avg turn {:.3}  |  {}", current_eval.avg_win_turn, config_to_string(&current));
+
+    loop {
+        let swaps = neighbor_swaps(&current, &pool);
+        println!("Testing {} single swaps...", swaps.len());
+        let mut best_swap: Option<(String, String, LandConfig, EvalResult)> = None;
+        for (donor, receiver, next) in swaps {
+            let Some(result) = eval(&next, STAGE3_GAMES) else { continue };
+            let better_than_best = match &best_swap {
+                None => true,
+                Some((_, _, _, b)) => result.score_cmp(b) == std::cmp::Ordering::Less,
+            };
+            if better_than_best {
+                best_swap = Some((donor, receiver, next, result));
+            }
+        }
+
+        match best_swap {
+            Some((donor, receiver, next, result))
+                if result.avg_win_turn <= current_eval.avg_win_turn - IMPROVE_THRESHOLD =>
+            {
+                println!("Move: -1 {}, +1 {} => avg turn {:.3} (was {:.3})",
+                    donor, receiver, result.avg_win_turn, current_eval.avg_win_turn);
+                current = next;
+                current_eval = result;
+            }
+            Some((donor, receiver, _, result)) => {
+                println!("Best swap (-1 {}, +1 {}) gives {:.3}, less than {:.2} better than {:.3}. Stop.",
+                    donor, receiver, result.avg_win_turn, IMPROVE_THRESHOLD, current_eval.avg_win_turn);
+                break;
+            }
+            None => {
+                println!("No legal swaps. Stop.");
+                break;
+            }
+        }
+    }
+
+    // --- Final confirmation ---
+    println!("\n--- Final confirmation at {} games ---", FINAL_GAMES);
+    let Some(final_eval) = eval(&current, FINAL_GAMES) else { return };
 
     let total_time = start.elapsed().as_secs_f64();
-
-    println!("\n=== Optimization Complete ===");
-    println!("Total time: {:.1}s", total_time);
-    println!("Configurations tested: {}", num_configs);
-    println!("Games per config: {}", games_per_config);
-    println!("Total games: {}\n", num_configs * games_per_config);
-
+    println!("\n=== Optimization Complete ({:.0}s) ===\n", total_time);
     println!("=== BEST LAND CONFIGURATION ===");
-    println!("Average win turn: {:.3}", best_avg_turn);
-    println!("Win rate: {:.1}%", best_win_rate * 100.0);
+    println!("Average win turn: {:.3}", final_eval.avg_win_turn);
+    println!("Win rate: {:.1}%", final_eval.win_rate * 100.0);
+    println!("Turn 4 win: {:.2}%  Turn 5 win: {:.2}%  Turn 6 win: {:.2}%",
+        final_eval.turn_pct(4), final_eval.turn_pct(5), final_eval.turn_pct(6));
+    println!("Wrong mana on turn 4: {:.2}%", final_eval.wrong_mana_turn4_pct);
     println!("\nLand breakdown:");
-    if let Some(config) = &best_config {
-        let mut lands: Vec<_> = config.iter().filter(|(_, count)| **count > 0).collect();
-        lands.sort_by(|a, b| b.1.cmp(a.1).then_with(|| a.0.cmp(b.0)));
-        for (name, count) in lands {
-            println!("  {} {}", count, name);
-        }
+    let mut lands: Vec<_> = current.iter().filter(|(_, count)| **count > 0).collect();
+    lands.sort_by(|a, b| b.1.cmp(a.1).then_with(|| a.0.cmp(b.0)));
+    for (name, count) in lands {
+        println!("  {} {}", count, name);
     }
 
-    // Show top 10 configurations
-    println!("\n=== Top 10 Configurations ===");
-    all_results.sort_by(|a, b| a.2.partial_cmp(&b.2).unwrap_or(std::cmp::Ordering::Equal));
-    for (i, (config, win_rate, avg_turn)) in all_results.iter().take(10).enumerate() {
-        println!("[{}] Avg turn: {:.3}, Win rate: {:.1}%", i + 1, avg_turn, win_rate * 100.0);
+    println!("\n=== Top {} stage-2 configurations (at {} games) ===", stage2.len(), STAGE2_GAMES);
+    for (i, (config, result)) in stage2.iter().enumerate() {
+        println!("[{}] avg turn {:.3}, T4 {:.2}%, T5 {:.2}%, T6 {:.2}%, wrong mana T4 {:.2}%",
+            i + 1, result.avg_win_turn, result.turn_pct(4), result.turn_pct(5),
+            result.turn_pct(6), result.wrong_mana_turn4_pct);
         println!("    {}", config_to_string(config));
     }
 
     // Save best deck to file with all optimization metadata
-    if let Some(config) = &best_config {
-        let params = DeckSaveParams {
-            win_rate: best_win_rate,
-            avg_win_turn: best_avg_turn,
-            num_simulations: games_per_config,
-            strategy: strategy.to_string(),
-            turn_distribution: best_turn_distribution,
-            fixed_cards: &fixed_cards,
-        };
-        match save_deck_to_file(config, &params) {
-            Ok(filename) => println!("\nBest deck saved to: {}", filename),
-            Err(e) => eprintln!("\nFailed to save deck: {}", e),
-        }
+    let set_codes = parse_set_codes(deck_file);
+    let params = DeckSaveParams {
+        eval: &final_eval,
+        base_seed,
+        strategy: "3-stage: random search, top-10 retest, local search".to_string(),
+        fixed_cards: &fixed_cards,
+        set_codes: &set_codes,
+        out_file,
+    };
+    match save_deck_to_file(&current, &params) {
+        Ok(filename) => println!("\nBest deck saved to: {}", filename),
+        Err(e) => eprintln!("\nFailed to save deck: {}", e),
     }
 }
 
