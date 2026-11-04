@@ -1,6 +1,6 @@
 # Reanimator variant: no red, Yuriko, Hope from the Shadows replaces Fear of Missing Out
 # Mana change vs deck_latest.txt: -4 Blood Crypt, -2 Blazemire Verge;
-# +2 Gloomlake Verge, +2 Shipwreck Marsh, +2 Swamp (24 lands)
+# +2 Gloomlake Verge, +2 Shipwreck Marsh, +1 Swamp, +1 Multiversal Passage (24 lands)
 Deck
 4 Dark Matter Manipulator (FRA) 52
 4 Starting Town (FIN) 289
@@ -19,9 +19,9 @@ Deck
 2 Yuriko, Hope from the Shadows (FRA) 226
 4 Watery Grave (EOE) 261
 4 Gloomlake Verge (DSK) 260
-3 Multiversal Passage (SPM) 180
+4 Multiversal Passage (SPM) 180
 2 Undercity Sewers (MKM) 270
 2 Shipwreck Marsh (FRA) 189
-2 Swamp (FDN) 276
+1 Swamp (FDN) 276
 2 Cavern of Souls (LCI) 269
 1 Pit of Offerings (LCI) 278
