@@ -24,6 +24,11 @@ fn is_mill_enabler(card: &Card) -> bool {
             | "Fear of Missing Out"
             | "Beseech the Mirror"
             | "Bitter Triumph"
+            | "Wreckage Wickerfolk"
+            | "Roiling Dragonstorm"
+            | "Corroding Dragonstorm"
+            | "Bellowing Crier"
+            | "Yuriko, Hope from the Shadows"
     )
 }
 

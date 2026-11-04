@@ -736,5 +736,96 @@
     "colors": [
       "C"
     ]
+  },
+  {
+    "name": "Shipwreck Marsh",
+    "card_type": "land",
+    "mana_value": 0,
+    "subtype": "slowland",
+    "enters_tapped": true,
+    "colors": [
+      "U",
+      "B"
+    ]
+  },
+  {
+    "name": "Wreckage Wickerfolk",
+    "card_type": "creature",
+    "mana_cost": {
+      "black": 1,
+      "generic": 1
+    },
+    "mana_value": 2,
+    "power": 1,
+    "toughness": 3,
+    "creature_types": [
+      "Scarecrow"
+    ],
+    "abilities": [
+      "flying",
+      "etb_surveil_2"
+    ]
+  },
+  {
+    "name": "Roiling Dragonstorm",
+    "card_type": "enchantment",
+    "mana_cost": {
+      "blue": 1,
+      "generic": 1
+    },
+    "mana_value": 2,
+    "abilities": [
+      "etb_draw_2_discard_1",
+      "dragon_bounce_home"
+    ]
+  },
+  {
+    "name": "Corroding Dragonstorm",
+    "card_type": "enchantment",
+    "mana_cost": {
+      "black": 1,
+      "generic": 1
+    },
+    "mana_value": 2,
+    "abilities": [
+      "etb_drain_2_gain_2_surveil_2",
+      "dragon_bounce_home"
+    ]
+  },
+  {
+    "name": "Bellowing Crier",
+    "card_type": "creature",
+    "mana_cost": {
+      "blue": 1,
+      "generic": 1
+    },
+    "mana_value": 2,
+    "power": 2,
+    "toughness": 1,
+    "creature_types": [
+      "Frog",
+      "Advisor"
+    ],
+    "abilities": [
+      "etb_draw_1_discard_1"
+    ]
+  },
+  {
+    "name": "Yuriko, Hope from the Shadows",
+    "card_type": "creature",
+    "mana_cost": {
+      "blue": 1
+    },
+    "mana_value": 1,
+    "power": 1,
+    "toughness": 1,
+    "is_legendary": true,
+    "creature_types": [
+      "Human",
+      "Ninja"
+    ],
+    "abilities": [
+      "etb_surveil_2"
+    ]
   }
 ]

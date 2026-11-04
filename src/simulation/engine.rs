@@ -450,6 +450,12 @@ pub fn main_phase(state: &mut GameState, db: &CardDatabase, verbose: bool, rng: 
                 }
                 LandSubtype::Town => state.turn > 3,
                 LandSubtype::Shock => state.life <= 2, // Enters tapped if we can't pay 2 life
+                LandSubtype::Slowland => {
+                    let land_count = state.battlefield.permanents().iter()
+                        .filter(|p| matches!(p.card, Card::Land(_)))
+                        .count();
+                    land_count < 2
+                }
                 _ => land.enters_tapped,
             }
         };
@@ -860,7 +866,13 @@ pub fn main_phase(state: &mut GameState, db: &CardDatabase, verbose: bool, rng: 
             // Priority 2a: Discard outlets if a reanimation target is in hand
             // (Bitter Triumph discards it directly; the looters can too)
             if has_reanimation_target_in_hand {
-                for outlet in ["Bitter Triumph", "Fear of Missing Out", "Does Machines"] {
+                for outlet in [
+                    "Bitter Triumph",
+                    "Fear of Missing Out",
+                    "Does Machines",
+                    "Roiling Dragonstorm",
+                    "Bellowing Crier",
+                ] {
                     if a_card.name() == outlet {
                         return std::cmp::Ordering::Less;
                     }
@@ -899,6 +911,11 @@ pub fn main_phase(state: &mut GameState, db: &CardDatabase, verbose: bool, rng: 
                 "Does Machines",
                 "Fear of Missing Out",
                 "Deceit",
+                "Wreckage Wickerfolk",
+                "Roiling Dragonstorm",
+                "Corroding Dragonstorm",
+                "Bellowing Crier",
+                "Yuriko, Hope from the Shadows",
             ];
             let a_is_mill = mill_spells.contains(&a_card.name());
             let b_is_mill = mill_spells.contains(&b_card.name());
@@ -1079,10 +1096,14 @@ pub fn main_phase(state: &mut GameState, db: &CardDatabase, verbose: bool, rng: 
     }
 
     // STEP 6: Does Machines level 2 ({1}{U}, sorcery speed): with spare mana and
-    // a Grim Bauble in the graveyard, level up and return up to two Grim Baubles
-    // to hand. Level 3 is out of scope.
-    let has_bauble_in_gy = state.graveyard.cards().iter().any(|c| c.name() == "Grim Bauble");
-    if has_bauble_in_gy {
+    // an artifact card in the graveyard (Grim Bauble or Wreckage Wickerfolk),
+    // level up and return the best two artifact cards to hand. Baubles first:
+    // a Bauble in the graveyard is a dead card, while Wickerfolk is a creature
+    // that the mass reanimate returns for free. Level 3 is out of scope.
+    const GY_ARTIFACTS: &[&str] = &["Grim Bauble", "Wreckage Wickerfolk"];
+    let has_artifact_in_gy = state.graveyard.cards().iter()
+        .any(|c| GY_ARTIFACTS.contains(&c.name()));
+    if has_artifact_in_gy {
         let class_idx = state.battlefield.permanents().iter().position(|p| {
             p.card.name() == "Does Machines"
                 && p.is_copy_of.is_none()
@@ -1100,7 +1121,9 @@ pub fn main_phase(state: &mut GameState, db: &CardDatabase, verbose: bool, rng: 
                 let mut returned = 0;
                 while returned < 2 {
                     let Some(gy_idx) = state.graveyard.cards().iter()
-                        .position(|c| c.name() == "Grim Bauble") else { break };
+                        .position(|c| c.name() == "Grim Bauble")
+                        .or_else(|| state.graveyard.cards().iter()
+                            .position(|c| c.name() == "Wreckage Wickerfolk")) else { break };
                     if let Some(card) = state.graveyard.remove_card(gy_idx) {
                         if verbose {
                             println!("    Level 2: returned {} to hand", card.name());
@@ -1662,6 +1685,143 @@ mod tests {
         assert!(state.battlefield.permanents().iter()
             .filter(|p| matches!(p.card, Card::Land(_)))
             .all(|p| !p.tapped), "No mana spent");
+    }
+
+    #[test]
+    fn test_shipwreck_marsh_enters_tapped_with_fewer_than_two_other_lands() {
+        let db = CardDatabase::from_file("cards.json").expect("Failed to load cards");
+        let marsh = db.get_card("Shipwreck Marsh").expect("Shipwreck Marsh");
+
+        // 0 other lands: enters tapped
+        let mut state = GameState::new();
+        state.turn = 1;
+        let _ = cards::play_land(&mut state, &marsh, false);
+        assert!(state.battlefield.permanents()[0].tapped,
+            "Shipwreck Marsh must enter tapped with no other lands");
+
+        // 1 other land: still tapped
+        let mut state = GameState::new();
+        state.turn = 2;
+        let swamp = db.get_card("Swamp").expect("Swamp");
+        state.battlefield.add_permanent(crate::game::zones::Permanent::new(swamp.clone(), 1));
+        let _ = cards::play_land(&mut state, &marsh, false);
+        let perm = state.battlefield.permanents().iter()
+            .find(|p| p.card.name() == "Shipwreck Marsh").expect("Marsh on battlefield");
+        assert!(perm.tapped, "Shipwreck Marsh must enter tapped with only one other land");
+    }
+
+    #[test]
+    fn test_shipwreck_marsh_enters_untapped_with_two_other_lands() {
+        let db = CardDatabase::from_file("cards.json").expect("Failed to load cards");
+        let marsh = db.get_card("Shipwreck Marsh").expect("Shipwreck Marsh");
+        let swamp = db.get_card("Swamp").expect("Swamp");
+
+        let mut state = GameState::new();
+        state.turn = 3;
+        for _ in 0..2 {
+            state.battlefield.add_permanent(crate::game::zones::Permanent::new(swamp.clone(), 1));
+        }
+        let _ = cards::play_land(&mut state, &marsh, false);
+        let perm = state.battlefield.permanents().iter()
+            .find(|p| p.card.name() == "Shipwreck Marsh").expect("Marsh on battlefield");
+        assert!(!perm.tapped, "Shipwreck Marsh must enter untapped with two other lands");
+    }
+
+    #[test]
+    fn test_wickerfolk_etb_surveils_bringer_into_graveyard() {
+        let db = CardDatabase::from_file("cards.json").expect("Failed to load cards");
+        let mut state = GameState::new();
+        state.turn = 2;
+
+        // 2 Swamps pay {1}{B}
+        let swamp = db.get_card("Swamp").expect("Swamp");
+        for _ in 0..2 {
+            state.battlefield.add_permanent(crate::game::zones::Permanent::new(swamp.clone(), 1));
+        }
+        state.hand.add_card(db.get_card("Wreckage Wickerfolk").expect("Wickerfolk"));
+
+        // Bringer on top of the library, a Forest under it
+        state.library.add_card(db.get_card("Bringer of the Last Gift").expect("Bringer"));
+        state.library.add_card(db.get_card("Forest").expect("Forest"));
+
+        let mut rng = crate::rng::GameRng::new(Some(5));
+        main_phase(&mut state, &db, false, &mut rng);
+
+        assert!(
+            state.battlefield.permanents().iter().any(|p| p.card.name() == "Wreckage Wickerfolk"),
+            "Wickerfolk should be cast"
+        );
+        assert!(
+            state.graveyard.cards().iter().any(|c| c.name() == "Bringer of the Last Gift"),
+            "Surveil 2 should put Bringer into the graveyard"
+        );
+        assert_eq!(state.library.size(), 1, "The Forest stays on top of the library");
+    }
+
+    #[test]
+    fn test_dragonstorms_return_to_hand_when_marang_enters() {
+        let db = CardDatabase::from_file("cards.json").expect("Failed to load cards");
+        let mut state = GameState::new();
+        state.turn = 5;
+
+        // Both Dragonstorms on the battlefield (ETBs already used)
+        state.battlefield.add_permanent(crate::game::zones::Permanent::new(
+            db.get_card("Roiling Dragonstorm").expect("Roiling"), 3));
+        state.battlefield.add_permanent(crate::game::zones::Permanent::new(
+            db.get_card("Corroding Dragonstorm").expect("Corroding"), 4));
+
+        // Marang (a Dragon) enters
+        let marang = db.get_card("Marang River Regent").expect("Marang");
+        let mut perm = crate::game::zones::Permanent::new(marang, 5);
+        state.battlefield.add_permanent(perm.clone());
+        let mut rng = crate::rng::GameRng::new(Some(5));
+        let _ = cards::process_etb_triggers_verbose(&mut state, &mut perm, &db, false, &mut rng);
+
+        assert!(
+            state.hand.cards().iter().any(|c| c.name() == "Roiling Dragonstorm"),
+            "Roiling Dragonstorm must return to hand when Marang enters"
+        );
+        assert!(
+            state.hand.cards().iter().any(|c| c.name() == "Corroding Dragonstorm"),
+            "Corroding Dragonstorm must return to hand when Marang enters"
+        );
+        assert!(state.battlefield.permanents().iter()
+            .all(|p| !p.card.name().contains("Dragonstorm")));
+    }
+
+    #[test]
+    fn test_does_machines_level_2_returns_wickerfolk() {
+        let db = CardDatabase::from_file("cards.json").expect("Failed to load cards");
+        let mut state = GameState::new();
+        state.turn = 3;
+
+        let island = db.get_card("Island").expect("Island");
+        for _ in 0..2 {
+            state.battlefield.add_permanent(crate::game::zones::Permanent::new(island.clone(), 1));
+        }
+        state.battlefield.add_permanent(crate::game::zones::Permanent::new(
+            db.get_card("Does Machines").expect("Does Machines"), 1));
+
+        // One Bauble and one Wickerfolk in the graveyard: both artifact cards
+        state.graveyard.add_card(db.get_card("Grim Bauble").expect("Grim Bauble"));
+        state.graveyard.add_card(db.get_card("Wreckage Wickerfolk").expect("Wickerfolk"));
+
+        let mut rng = crate::rng::GameRng::new(Some(5));
+        main_phase(&mut state, &db, false, &mut rng);
+
+        assert!(
+            state.hand.cards().iter().any(|c| c.name() == "Grim Bauble"),
+            "Level 2 returns the Grim Bauble"
+        );
+        assert!(
+            state.hand.cards().iter().any(|c| c.name() == "Wreckage Wickerfolk"),
+            "Level 2 returns Wreckage Wickerfolk (artifact card) as the second pick"
+        );
+        let class = state.battlefield.permanents().iter()
+            .find(|p| p.card.name() == "Does Machines")
+            .expect("Does Machines stays on the battlefield");
+        assert_eq!(class.get_counter(crate::game::zones::CounterType::Level), 1,
+            "The Class is marked as level 2");
     }
 
     #[test]

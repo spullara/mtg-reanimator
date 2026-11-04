@@ -173,6 +173,9 @@ pub enum LandSubtype {
     Surveil,
     Utility,
     Fastland,
+    /// Enters tapped unless you control two or more other lands
+    /// (Shipwreck Marsh and the other MID/VOW "slow lands")
+    Slowland,
     Town,
 }
 

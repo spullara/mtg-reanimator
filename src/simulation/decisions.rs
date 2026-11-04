@@ -103,6 +103,26 @@ impl DecisionEngine {
                 targets.push(i);
             }
         }
+        // Dragonstorms: enchantments with recastable ETB value (no combat value
+        // is lost by bouncing them)
+        for (i, p) in perms.iter().enumerate() {
+            if matches!(p.card.name(), "Roiling Dragonstorm" | "Corroding Dragonstorm")
+                && p.is_copy_of.is_none()
+            {
+                targets.push(i);
+            }
+        }
+        // ETB-value creatures that entered this turn (cannot attack yet)
+        for (i, p) in perms.iter().enumerate() {
+            if matches!(
+                p.card.name(),
+                "Wreckage Wickerfolk" | "Bellowing Crier" | "Yuriko, Hope from the Shadows"
+            ) && p.turn_entered >= state.turn
+                && p.is_copy_of.is_none()
+            {
+                targets.push(i);
+            }
+        }
 
         targets.truncate(max);
         targets
@@ -155,6 +175,9 @@ impl DecisionEngine {
                     state.battlefield.permanents().iter().filter(|p| matches!(p.card, Card::Land(_))).count() >= 3
                 }
                 LandSubtype::Town => state.turn > 3,
+                LandSubtype::Slowland => {
+                    state.battlefield.permanents().iter().filter(|p| matches!(p.card, Card::Land(_))).count() < 2
+                }
                 LandSubtype::Utility => {
                     // Verge lands: simplified to always enter untapped
                     // Other utility lands: use card definition

@@ -74,6 +74,16 @@ pub fn play_land(state: &mut GameState, card: &Card, verbose: bool) -> Result<()
             // Starting Town: enters untapped on turns 1-3, tapped on turn 4+
             enters_tapped = state.turn > 3;
         }
+        LandSubtype::Slowland => {
+            // Shipwreck Marsh: enters tapped unless you control 2+ other lands
+            let land_count = state
+                .battlefield
+                .permanents()
+                .iter()
+                .filter(|p| matches!(p.card, Card::Land(_)))
+                .count();
+            enters_tapped = land_count < 2;
+        }
         LandSubtype::Utility => {
             // Verge lands (Wastewood Verge, Gloomlake Verge): simplified to always enter untapped
             // Other utility lands (Restless Cottage, Cavern, Passage): use card definition
@@ -582,6 +592,24 @@ pub fn cast_spell(
                         // Dredger's Insight: gain life when leaving graveyard
                         // This is a triggered ability, handled elsewhere
                     }
+                    "etb_draw_2_discard_1" => {
+                        // Roiling Dragonstorm: draw two cards, then discard a card
+                        resolve_draw_n_discard_n(state, 2, 1, verbose);
+                    }
+                    "etb_drain_2_gain_2_surveil_2" => {
+                        // Corroding Dragonstorm: each opponent loses 2 life and
+                        // you gain 2 life. Surveil 2.
+                        state.opponent_life -= 2;
+                        state.life += 2;
+                        if verbose {
+                            println!("    Corroding Dragonstorm: opponent loses 2, gain 2 life");
+                        }
+                        resolve_surveil(state, 2, verbose);
+                    }
+                    "dragon_bounce_home" => {
+                        // Return-to-hand trigger: handled when a Dragon enters
+                        // (return_dragonstorms_to_hand), nothing to do on cast
+                    }
                     "etb_mill_2_draw_2_discard_2" => {
                         // Does Machines: mill 2, draw 2, then discard 2
                         resolve_mill_n(state, 2, verbose);
@@ -716,9 +744,20 @@ pub fn process_etb_triggers_verbose(
                 // Fear of Missing Out: discard 1, then draw 1
                 resolve_fear_of_missing_out_etb(state, verbose);
             }
+            "etb_surveil_2" => {
+                // Wreckage Wickerfolk / Yuriko (always chooses this mode): surveil 2
+                resolve_surveil(state, 2, verbose);
+            }
+            "etb_draw_1_discard_1" => {
+                // Bellowing Crier: draw a card, then discard a card
+                resolve_draw_n_discard_n(state, 1, 1, verbose);
+            }
             "etb_bounce_up_to_two" => {
-                // Marang River Regent: return up to two other nonland permanents
-                // to hand (bounce our own ETB-value permanents to recast them)
+                // Marang River Regent: a Dragon entered, so every Dragonstorm
+                // returns to hand first (it needs no bounce slot), then return
+                // up to two other nonland permanents to hand (bounce our own
+                // ETB-value permanents to recast them)
+                return_dragonstorms_to_hand(state, verbose);
                 resolve_bounce_recast_targets(state, 2, verbose);
             }
             "etb_discard_tutor_creature" => {
@@ -955,6 +994,8 @@ pub fn process_etb_triggers_verbose(
                         state.exile.add_card(creature);
                     }
                     if creature_name == "Marang River Regent" {
+                        // The copy keeps Marang's types: a Dragon entered
+                        return_dragonstorms_to_hand(state, verbose);
                         resolve_bounce_recast_targets(state, 2, verbose);
                     }
                 } else if verbose {
@@ -965,7 +1006,75 @@ pub fn process_etb_triggers_verbose(
         }
     }
 
+    // A Dragon entering returns each Dragonstorm on the battlefield to hand
+    // (card types of the copied card are kept, so copies count too)
+    if permanent_is_dragon(permanent) {
+        return_dragonstorms_to_hand(state, verbose);
+    }
+
     Ok(())
+}
+
+/// Known Dragons for copy checks (a copy keeps the copied card's types)
+const KNOWN_DRAGONS: &[&str] = &["Marang River Regent", "Terror of the Peaks"];
+
+/// Check if a permanent is a Dragon (by its own types or as a copy of a Dragon)
+fn permanent_is_dragon(permanent: &Permanent) -> bool {
+    let card_is_dragon = match &permanent.card {
+        Card::Creature(c) => c.creature_types.iter().any(|t| t == "Dragon"),
+        _ => false,
+    };
+    let copy_is_dragon = permanent
+        .is_copy_of
+        .map(|name| KNOWN_DRAGONS.contains(&name))
+        .unwrap_or(false);
+    card_is_dragon || copy_is_dragon
+}
+
+/// "When a Dragon you control enters, return this enchantment to its owner's
+/// hand." Move every Dragonstorm from the battlefield to hand so it can be
+/// recast later for its ETB.
+pub fn return_dragonstorms_to_hand(state: &mut GameState, verbose: bool) {
+    loop {
+        let idx = state.battlefield.permanents().iter().position(|p| {
+            matches!(p.card.name(), "Roiling Dragonstorm" | "Corroding Dragonstorm")
+                && p.is_copy_of.is_none()
+        });
+        let Some(idx) = idx else { break };
+        if let Some(perm) = state.battlefield.remove_permanent(idx) {
+            if verbose {
+                println!("    {} returns to hand (a Dragon entered)", perm.card.name());
+            }
+            state.hand.add_card(perm.card);
+        }
+    }
+}
+
+/// Draw `draw` cards, then discard `discard` cards (Bellowing Crier's loot)
+pub fn resolve_draw_n_discard_n(state: &mut GameState, draw: usize, discard: usize, verbose: bool) {
+    let hand_before = state.hand.size();
+    for _ in 0..draw {
+        state.draw_card();
+    }
+    if verbose {
+        let drawn: Vec<&str> = state.hand.cards().iter()
+            .skip(hand_before)
+            .map(|c| c.name())
+            .collect();
+        if !drawn.is_empty() {
+            println!("    Drew: {}", drawn.join(", "));
+        }
+    }
+    for _ in 0..discard {
+        if let Some(idx) = DecisionEngine::choose_discard(state) {
+            if let Some(card) = state.hand.remove_card(idx) {
+                if verbose {
+                    println!("    Discarded: {}", card.name());
+                }
+                state.graveyard.add_card(card);
+            }
+        }
+    }
 }
 
 /// Resolve Bringer of the Last Gift ETB: sacrifice all other creatures, then mass reanimate
@@ -1105,11 +1214,26 @@ pub fn resolve_bringer_etb(state: &mut GameState, rng: &mut crate::rng::GameRng,
             "Fear of Missing Out" => {
                 resolve_fear_of_missing_out_etb(state, verbose);
             }
+            "Wreckage Wickerfolk" | "Yuriko, Hope from the Shadows" => {
+                resolve_surveil(state, 2, verbose);
+            }
+            "Bellowing Crier" => {
+                resolve_draw_n_discard_n(state, 1, 1, verbose);
+            }
             "Marang River Regent" => {
                 resolve_bounce_recast_targets(state, 2, verbose);
             }
             _ => {}
         }
+    }
+
+    // A Dragon entering (reanimated Marang/Terror, or Spider-Man copying
+    // Terror) returns each Dragonstorm on the battlefield to hand
+    let dragon_entered = creatures_to_reanimate.iter().any(|c| {
+        matches!(c, Card::Creature(cr) if cr.creature_types.iter().any(|t| t == "Dragon"))
+    }) || spider_man_copy_target == Some("Terror of the Peaks");
+    if dragon_entered {
+        return_dragonstorms_to_hand(state, verbose);
     }
 
     // Step 4: Resolve Terror triggers for each creature that entered
@@ -1459,9 +1583,12 @@ fn bitter_triumph_self_kill_target(state: &GameState) -> Option<usize> {
 }
 
 /// Bargain fodder for Beseech the Mirror, best first.
-/// Enchantment creatures are the best bargain because the mass reanimate returns
-/// them: an impending Overlord (sacrificing it even upgrades it to a full
-/// creature), then Fear of Missing Out, then a flipped Overlord. Surveil and
+/// Enchantment creatures and artifact creatures are the best bargain because
+/// the mass reanimate returns them: an impending Overlord (sacrificing it even
+/// upgrades it to a full creature), then Fear of Missing Out, then Wreckage
+/// Wickerfolk, then a flipped Overlord. Next a Dragonstorm on the battlefield
+/// (its ETB is already used; a Dragon entering would return it, but that is
+/// smaller value than the free-cast). Surveil and
 /// bargain are an either/or choice for each Grim Bauble (the surveil sacrifices
 /// it): bargain a Bauble before Does Machines only when no mana is free for its
 /// surveil this turn. When the surveil is affordable, keep the Bauble for it,
@@ -1481,7 +1608,18 @@ pub fn beseech_bargain_fodder(state: &GameState) -> Option<usize> {
         return Some(i);
     }
     if let Some(i) = perms.iter().position(|p| {
+        p.card.name() == "Wreckage Wickerfolk" && p.is_copy_of.is_none()
+    }) {
+        return Some(i);
+    }
+    if let Some(i) = perms.iter().position(|p| {
         p.card.name() == "Overlord of the Balemurk" && p.is_copy_of.is_none()
+    }) {
+        return Some(i);
+    }
+    if let Some(i) = perms.iter().position(|p| {
+        matches!(p.card.name(), "Roiling Dragonstorm" | "Corroding Dragonstorm")
+            && p.is_copy_of.is_none()
     }) {
         return Some(i);
     }
