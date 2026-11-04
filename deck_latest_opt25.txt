@@ -1,0 +1,56 @@
+# MTG Reanimator Deck
+# Generated: 2026-11-04 08:29:10
+# Hash: 6f3985c8
+#
+# Optimization Results
+# Strategy: 3-stage: random search, top-10 retest, local search
+# Simulations: 50000
+# Seed base: 1
+# Win rate: 100.0%
+# Average win turn: 6.523
+# Wrong mana on turn 4: 0.00%
+# Change: +1 Undercity Sewers, cut 1 Deceit (vs the base deck)
+#
+# Turn Distribution
+# Turn 4: 2594 (5.2%)
+# Turn 5: 12305 (24.6%)
+# Turn 6: 14113 (28.2%)
+# Turn 7: 9555 (19.1%)
+# Turn 8: 5337 (10.7%)
+# Turn 9: 3132 (6.3%)
+# Turn 10: 1718 (3.4%)
+# Turn 11: 707 (1.4%)
+# Turn 12: 339 (0.7%)
+# Turn 13: 105 (0.2%)
+# Turn 14: 51 (0.1%)
+# Turn 15: 25 (0.1%)
+# Turn 16: 9 (0.0%)
+# Turn 17: 5 (0.0%)
+# Turn 18: 3 (0.0%)
+# Turn 19: 2 (0.0%)
+Deck
+# Fixed cards (35)
+2 Ardyn, the Usurper (FIN) 89
+2 Beseech the Mirror (WOE) 82
+3 Bitter Triumph (LCI) 91
+4 Bringer of the Last Gift (LCI) 94
+4 Dark Matter Manipulator (FRA) 52
+2 Deceit (ECL) 212
+4 Does Machines (TMT) 34
+2 Grim Bauble (DFT) 88
+1 Marang River Regent (TDM) 51
+4 Overlord of the Balemurk (DSK) 113
+4 Superior Spider-Man (SPM) 155
+2 Terror of the Peaks (M21) 164
+1 Valgavoth, Terror Eater (DSK) 120
+
+# Lands (25)
+4 Watery Grave (EOE) 261
+3 Cavern of Souls (LCI) 269
+3 Gloomlake Verge (DSK) 260
+3 Multiversal Passage (SPM) 180
+3 Starting Town (FIN) 289
+3 Swamp (VOW) 273
+3 Undercity Sewers (MKM) 270
+2 Shipwreck Marsh (FRA) 189
+1 Pit of Offerings (LCI) 278
