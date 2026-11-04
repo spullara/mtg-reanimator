@@ -1053,19 +1053,7 @@ pub fn main_phase(state: &mut GameState, db: &CardDatabase, verbose: bool, rng: 
                 if verbose {
                     println!("  [Cast] Coil and Catch (omen): draw 3, discard 1");
                 }
-                for _ in 0..3 {
-                    state.draw_card();
-                }
-                if let Some(didx) = DecisionEngine::choose_discard(state) {
-                    if let Some(discarded) = state.hand.remove_card(didx) {
-                        if verbose {
-                            println!("    Discarded: {}", discarded.name());
-                        }
-                        state.graveyard.add_card(discarded);
-                    }
-                }
-                state.library.add_card(card);
-                state.library.shuffle(rng);
+                cards::resolve_coil_and_catch(state, card, rng, verbose);
             }
         }
     }

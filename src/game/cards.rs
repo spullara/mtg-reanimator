@@ -1663,7 +1663,14 @@ fn beseech_plan(state: &GameState) -> Option<(&'static str, bool)> {
         return None;
     }
 
-    // No target in the graveyard yet: get a discard outlet or Bringer
+    // No target in the graveyard yet. With bargain fodder, free-cast Marang's
+    // omen side (Coil and Catch, MV 4): draw 3, discard 1. It digs and bins a
+    // target in one card, so it beats a free Bitter Triumph.
+    if beseech_bargain_fodder(state).is_some() && in_library("Marang River Regent") {
+        return Some(("Marang River Regent", true));
+    }
+
+    // Otherwise get a discard outlet or Bringer
     let target_in_hand = DecisionEngine::reanimation_target_in_hand(state).is_some();
     if target_in_hand && !in_hand("Bitter Triumph") && in_library("Bitter Triumph") {
         // Bitter Triumph is MV 2, so a bargained Beseech casts it free
@@ -1681,6 +1688,29 @@ fn beseech_plan(state: &GameState) -> Option<(&'static str, bool)> {
 /// Check whether casting Beseech the Mirror right now does something useful
 pub fn beseech_useful(state: &GameState) -> bool {
     beseech_plan(state).is_some()
+}
+
+/// Resolve Coil and Catch (Marang River Regent's omen side): draw 3, discard 1,
+/// then shuffle the card into the library.
+pub fn resolve_coil_and_catch(
+    state: &mut GameState,
+    marang: Card,
+    rng: &mut crate::rng::GameRng,
+    verbose: bool,
+) {
+    for _ in 0..3 {
+        state.draw_card();
+    }
+    if let Some(didx) = DecisionEngine::choose_discard(state) {
+        if let Some(discarded) = state.hand.remove_card(didx) {
+            if verbose {
+                println!("    Discarded: {}", discarded.name());
+            }
+            state.graveyard.add_card(discarded);
+        }
+    }
+    state.library.add_card(marang);
+    state.library.shuffle(rng);
 }
 
 /// Resolve Beseech the Mirror: optionally bargain (sacrifice fodder), search the
@@ -1721,7 +1751,13 @@ pub fn resolve_beseech(
     let card = state.library.cards_mut().remove(lib_idx);
     state.library.shuffle(rng);
 
-    if free_cast && card.mana_value() <= 4 {
+    if free_cast && card.name() == "Marang River Regent" {
+        // Cast the omen side (Coil and Catch, MV 4) for free
+        if verbose {
+            println!("    Beseech the Mirror: casts Coil and Catch (Marang's omen) for free!");
+        }
+        resolve_coil_and_catch(state, card, rng, verbose);
+    } else if free_cast && card.mana_value() <= 4 {
         if verbose {
             println!("    Beseech the Mirror: casts {} for free!", card.name());
         }
@@ -2922,6 +2958,39 @@ mod new_card_tests {
             .find(|p| p.card.name() == "Fear of Missing Out")
             .expect("FOMO should be back on the battlefield");
         assert_eq!(fomo.turn_entered, 3, "FOMO re-entered this turn via mass reanimate");
+    }
+
+    #[test]
+    fn test_beseech_free_casts_coil_and_catch_without_combo_target() {
+        let db = load_db();
+        let mut state = GameState::new();
+        state.turn = 3;
+
+        // No combo target in the graveyard; Marang in the library with cards to draw
+        state.library.add_card(db.get_card("Marang River Regent").expect("Marang"));
+        for _ in 0..6 {
+            state.library.add_card(db.get_card("Forest").expect("Forest"));
+        }
+        // Bringer in hand: the discard should bin it
+        state.hand.add_card(db.get_card("Bringer of the Last Gift").expect("Bringer"));
+        state.battlefield.add_permanent(Permanent::new(
+            db.get_card("Does Machines").expect("Does Machines"), 2));
+
+        let hand_before = state.hand.cards().len();
+        let library_before = state.library.cards().len();
+        let beseech = db.get_card("Beseech the Mirror").expect("Beseech");
+        let mut rng = GameRng::new(Some(5));
+        cast_spell(&mut state, &beseech, &db, false, &mut rng).expect("cast should resolve");
+
+        // Bargained Does Machines, drew 3, discarded 1 (net +2 cards in hand)
+        assert!(state.battlefield.permanents().iter().all(|p| p.card.name() != "Does Machines"));
+        assert_eq!(state.hand.cards().len(), hand_before + 2);
+        assert!(state.graveyard.cards().iter().any(|c| c.name() == "Bringer of the Last Gift"),
+            "the discard should put Bringer into the graveyard");
+        // Marang was shuffled back into the library, not put in hand
+        assert!(state.hand.cards().iter().all(|c| c.name() != "Marang River Regent"));
+        assert!(state.library.cards().iter().any(|c| c.name() == "Marang River Regent"));
+        assert_eq!(state.library.cards().len(), library_before - 3);
     }
 
     #[test]
