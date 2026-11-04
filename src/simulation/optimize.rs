@@ -19,7 +19,8 @@ pub struct LandType {
     pub max: usize,
 }
 
-pub const TOTAL_LANDS: usize = 24; // 60 - 36
+/// Default number of land slots (60-card deck with 36 spells)
+pub const DEFAULT_TOTAL_LANDS: usize = 24;
 
 /// Extract non-land cards from a deck file
 pub fn extract_fixed_cards_from_deck(deck_file: &str, db: &CardDatabase) -> Result<FixedCards, String> {
@@ -104,24 +105,28 @@ pub fn parse_pool_text(content: &str) -> Result<Vec<LandType>, String> {
         pool.push(LandType { name, min, max });
     }
 
-    let min_sum: usize = pool.iter().map(|l| l.min).sum();
-    let max_sum: usize = pool.iter().map(|l| l.max).sum();
-    if min_sum > TOTAL_LANDS {
-        return Err(format!("Pool minimums add up to {}, more than {} lands", min_sum, TOTAL_LANDS));
-    }
-    if max_sum < TOTAL_LANDS {
-        return Err(format!("Pool maximums add up to {}, fewer than {} lands", max_sum, TOTAL_LANDS));
-    }
-
     Ok(pool)
 }
 
-/// Generate a random land configuration from a pool.
+/// Check that a pool can supply exactly `total_lands` lands.
+pub fn validate_pool_total(pool: &[LandType], total_lands: usize) -> Result<(), String> {
+    let min_sum: usize = pool.iter().map(|l| l.min).sum();
+    let max_sum: usize = pool.iter().map(|l| l.max).sum();
+    if min_sum > total_lands {
+        return Err(format!("Pool minimums add up to {}, more than {} lands", min_sum, total_lands));
+    }
+    if max_sum < total_lands {
+        return Err(format!("Pool maximums add up to {}, fewer than {} lands", max_sum, total_lands));
+    }
+    Ok(())
+}
+
+/// Generate a random land configuration with `total_lands` lands from a pool.
 /// Minimums are placed first; the remaining slots are filled by shuffling
 /// the spare capacity (max - min copies of each land) and taking the first N.
-pub fn generate_random_land_config(pool: &[LandType], rng: &mut GameRng) -> LandConfig {
+pub fn generate_random_land_config(pool: &[LandType], rng: &mut GameRng, total_lands: usize) -> LandConfig {
     let mut config = LandConfig::new();
-    let mut remaining = TOTAL_LANDS;
+    let mut remaining = total_lands;
 
     // First: enforce minimum constraints
     for land in pool {
@@ -398,6 +403,8 @@ pub struct DeckSaveParams<'a> {
     pub set_codes: &'a HashMap<String, String>,
     /// Output file name; when None, deck_<hash>.txt is used
     pub out_file: Option<String>,
+    /// Extra header line, e.g. the spell cut or added for 25/23 lands
+    pub change_note: Option<String>,
 }
 
 /// Save a deck configuration to a file in Arena format with a metadata header.
@@ -428,6 +435,9 @@ pub fn save_deck_to_file(config: &LandConfig, params: &DeckSaveParams) -> std::i
     writeln!(file, "# Win rate: {:.1}%", params.eval.win_rate * 100.0)?;
     writeln!(file, "# Average win turn: {:.3}", params.eval.avg_win_turn)?;
     writeln!(file, "# Wrong mana on turn 4: {:.2}%", params.eval.wrong_mana_turn4_pct)?;
+    if let Some(note) = &params.change_note {
+        writeln!(file, "# Change: {}", note)?;
+    }
     writeln!(file, "#")?;
 
     // Turn distribution
@@ -457,7 +467,8 @@ pub fn save_deck_to_file(config: &LandConfig, params: &DeckSaveParams) -> std::i
     writeln!(file)?;
 
     // Write lands sorted by count then name
-    writeln!(file, "# Lands ({})", TOTAL_LANDS)?;
+    let total_lands: usize = config.values().sum();
+    writeln!(file, "# Lands ({})", total_lands)?;
     let mut lands: Vec<_> = config.iter().filter(|(_, count)| **count > 0).collect();
     lands.sort_by(|a, b| b.1.cmp(a.1).then_with(|| a.0.cmp(b.0)));
     for (name, count) in lands {
@@ -502,21 +513,25 @@ mod tests {
         assert!(parse_pool_text("4 Island").is_err(), "missing field");
         assert!(parse_pool_text("3 1 Island").is_err(), "min > max");
         assert!(parse_pool_text("0 4 Island\n0 4 Island").is_err(), "duplicate");
-        assert!(parse_pool_text("0 4 Island").is_err(), "maximums below 24");
+        let small = parse_pool_text("0 4 Island").expect("parses");
+        assert!(validate_pool_total(&small, 24).is_err(), "maximums below 24");
+        assert!(validate_pool_total(&small, 4).is_ok());
     }
 
     #[test]
     fn test_generated_configs_respect_limits() {
         let pool = parse_pool_text(POOL_TEXT).expect("pool should parse");
-        let mut rng = GameRng::new(Some(42));
-        for _ in 0..100 {
-            let config = generate_random_land_config(&pool, &mut rng);
-            let total: usize = config.values().sum();
-            assert_eq!(total, TOTAL_LANDS, "total lands must be {}", TOTAL_LANDS);
-            for land in &pool {
-                let count = config.get(&land.name).copied().unwrap_or(0);
-                assert!(count >= land.min, "{} below min: {} < {}", land.name, count, land.min);
-                assert!(count <= land.max, "{} above max: {} > {}", land.name, count, land.max);
+        for total_lands in [23, 24, 25] {
+            let mut rng = GameRng::new(Some(42));
+            for _ in 0..100 {
+                let config = generate_random_land_config(&pool, &mut rng, total_lands);
+                let total: usize = config.values().sum();
+                assert_eq!(total, total_lands, "total lands must be {}", total_lands);
+                for land in &pool {
+                    let count = config.get(&land.name).copied().unwrap_or(0);
+                    assert!(count >= land.min, "{} below min: {} < {}", land.name, count, land.min);
+                    assert!(count <= land.max, "{} above max: {} > {}", land.name, count, land.max);
+                }
             }
         }
     }
@@ -525,9 +540,9 @@ mod tests {
     fn test_default_pool_still_works() {
         let pool = default_land_types();
         let mut rng = GameRng::new(Some(7));
-        let config = generate_random_land_config(&pool, &mut rng);
+        let config = generate_random_land_config(&pool, &mut rng, DEFAULT_TOTAL_LANDS);
         let total: usize = config.values().sum();
-        assert_eq!(total, TOTAL_LANDS);
+        assert_eq!(total, DEFAULT_TOTAL_LANDS);
         assert_eq!(config.get("Cavern of Souls").copied().unwrap_or(0), 4);
     }
 
@@ -538,7 +553,7 @@ mod tests {
             .expect("deck should parse");
         let pool = parse_pool_text(POOL_TEXT).expect("pool should parse");
         let mut rng = GameRng::new(Some(5));
-        let config = generate_random_land_config(&pool, &mut rng);
+        let config = generate_random_land_config(&pool, &mut rng, DEFAULT_TOTAL_LANDS);
 
         let a = evaluate_config(&config, &fixed, &db, 200, 1).expect("eval a");
         let b = evaluate_config(&config, &fixed, &db, 200, 1).expect("eval b");
@@ -557,13 +572,13 @@ mod tests {
     fn test_neighbor_swaps_respect_limits() {
         let pool = parse_pool_text(POOL_TEXT).expect("pool should parse");
         let mut rng = GameRng::new(Some(11));
-        let config = generate_random_land_config(&pool, &mut rng);
+        let config = generate_random_land_config(&pool, &mut rng, DEFAULT_TOTAL_LANDS);
         let swaps = neighbor_swaps(&config, &pool);
         assert!(!swaps.is_empty());
         for (donor, receiver, next) in &swaps {
             assert_ne!(donor, receiver);
             let total: usize = next.values().sum();
-            assert_eq!(total, TOTAL_LANDS);
+            assert_eq!(total, DEFAULT_TOTAL_LANDS);
             for land in &pool {
                 let count = next.get(&land.name).copied().unwrap_or(0);
                 assert!(count >= land.min && count <= land.max,

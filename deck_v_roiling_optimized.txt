@@ -1,31 +1,32 @@
 # MTG Reanimator Deck
-# Generated: 2026-11-03 23:08:13
-# Hash: 248eb231
+# Generated: 2026-11-03 23:17:26
+# Hash: 019f5a81
 #
 # Optimization Results
 # Strategy: 3-stage: random search, top-10 retest, local search
 # Simulations: 50000
 # Seed base: 1
 # Win rate: 100.0%
-# Average win turn: 6.514
-# Wrong mana on turn 4: 0.02%
+# Average win turn: 6.490
+# Wrong mana on turn 4: 0.06%
 #
 # Turn Distribution
-# Turn 4: 1801 (3.6%)
-# Turn 5: 11831 (23.7%)
-# Turn 6: 15318 (30.6%)
-# Turn 7: 10247 (20.5%)
-# Turn 8: 5488 (11.0%)
-# Turn 9: 2964 (5.9%)
-# Turn 10: 1382 (2.8%)
-# Turn 11: 598 (1.2%)
-# Turn 12: 219 (0.4%)
-# Turn 13: 84 (0.2%)
-# Turn 14: 38 (0.1%)
-# Turn 15: 20 (0.0%)
+# Turn 4: 2037 (4.1%)
+# Turn 5: 12045 (24.1%)
+# Turn 6: 15091 (30.2%)
+# Turn 7: 10214 (20.4%)
+# Turn 8: 5345 (10.7%)
+# Turn 9: 2914 (5.8%)
+# Turn 10: 1420 (2.8%)
+# Turn 11: 574 (1.1%)
+# Turn 12: 207 (0.4%)
+# Turn 13: 96 (0.2%)
+# Turn 14: 28 (0.1%)
+# Turn 15: 18 (0.0%)
 # Turn 16: 4 (0.0%)
-# Turn 17: 5 (0.0%)
-# Turn 18: 1 (0.0%)
+# Turn 17: 4 (0.0%)
+# Turn 18: 2 (0.0%)
+# Turn 19: 1 (0.0%)
 Deck
 # Fixed cards (36)
 2 Ardyn, the Usurper (FIN) 89
@@ -44,12 +45,12 @@ Deck
 1 Valgavoth, Terror Eater (DSK) 120
 
 # Lands (24)
+6 Swamp (FDN) 276
 4 Starting Town (FIN) 289
-4 Swamp (FDN) 276
 4 Watery Grave (EOE) 261
-3 Gloomlake Verge (DSK) 260
 2 Cavern of Souls (LCI) 269
+2 Gloomlake Verge (DSK) 260
 2 Island (FDN) 272
 2 Shipwreck Marsh (FRA) 189
-2 Undercity Sewers (MKM) 270
 1 Pit of Offerings (LCI) 278
+1 Undercity Sewers (MKM) 270
