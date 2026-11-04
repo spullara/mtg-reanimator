@@ -2556,6 +2556,135 @@ mod new_card_tests {
     }
 
     #[test]
+    fn test_marang_etb_bounces_up_to_two_value_permanents() {
+        let db = load_db();
+        let mut state = GameState::new();
+        state.turn = 3;
+
+        // Does Machines and an impending Overlord are the bounce targets
+        state.battlefield.add_permanent(Permanent::new(
+            db.get_card("Does Machines").expect("Does Machines"), 1));
+        let mut overlord = Permanent::new(
+            db.get_card("Overlord of the Balemurk").expect("Overlord"), 2);
+        overlord.add_counter(CounterType::Time, 4);
+        state.battlefield.add_permanent(overlord);
+
+        let marang = db.get_card("Marang River Regent").expect("Marang");
+        let mut perm = Permanent::new(marang, 3);
+        state.battlefield.add_permanent(perm.clone());
+
+        let mut rng = GameRng::new(Some(9));
+        process_etb_triggers_verbose(&mut state, &mut perm, &db, false, &mut rng)
+            .expect("ETB should resolve");
+
+        // Both value permanents are back in hand for a recast
+        assert!(state.hand.cards().iter().any(|c| c.name() == "Does Machines"));
+        assert!(state.hand.cards().iter().any(|c| c.name() == "Overlord of the Balemurk"));
+        assert!(state.battlefield.permanents().iter().all(|p| p.card.name() != "Does Machines"));
+        assert!(state.battlefield.permanents().iter().all(|p| p.card.name() != "Overlord of the Balemurk"));
+        // Marang itself stays
+        assert!(state.battlefield.permanents().iter().any(|p| p.card.name() == "Marang River Regent"));
+    }
+
+    #[test]
+    fn test_bitter_triumph_destroys_own_creature_for_ardyn() {
+        let db = load_db();
+        let mut state = GameState::new();
+        state.turn = 3;
+
+        // Ardyn is in the graveyard with no other creature: Starscourge needs fodder
+        state.graveyard.add_card(db.get_card("Ardyn, the Usurper").expect("Ardyn"));
+        state.battlefield.add_permanent(Permanent::new(
+            db.get_card("Dark Matter Manipulator").expect("DMM"), 2));
+
+        let bitter = db.get_card("Bitter Triumph").expect("Bitter Triumph");
+        let mut rng = GameRng::new(Some(9));
+        cast_spell(&mut state, &bitter, &db, false, &mut rng).expect("cast should resolve");
+
+        // Hand is empty, so the additional cost is 3 life
+        assert_eq!(state.life, 17, "Paid 3 life with nothing good to discard");
+        // Our own creature was destroyed into the graveyard
+        assert!(state.battlefield.permanents().iter().all(|p| p.card.name() != "Dark Matter Manipulator"));
+        assert!(state.graveyard.cards().iter().any(|c| c.name() == "Dark Matter Manipulator"));
+    }
+
+    #[test]
+    fn test_bitter_triumph_cost_choice_life_vs_discard() {
+        let db = load_db();
+        let bitter = db.get_card("Bitter Triumph").expect("Bitter Triumph");
+
+        // Case 1: only keeper cards in hand -> pay 3 life, keep Spider-Man
+        let mut state = GameState::new();
+        state.turn = 2;
+        state.hand.add_card(db.get_card("Superior Spider-Man").expect("Spidey"));
+        let mut rng = GameRng::new(Some(9));
+        cast_spell(&mut state, &bitter, &db, false, &mut rng).expect("cast should resolve");
+        assert_eq!(state.life, 17, "Pays life to keep Spider-Man");
+        assert!(state.hand.cards().iter().any(|c| c.name() == "Superior Spider-Man"));
+
+        // Case 2: a blank in hand -> discard it, keep the life
+        let mut state = GameState::new();
+        state.turn = 2;
+        state.hand.add_card(db.get_card("Requiting Hex").expect("Hex"));
+        cast_spell(&mut state, &bitter, &db, false, &mut rng).expect("cast should resolve");
+        assert_eq!(state.life, 20, "Discards the blank instead of paying life");
+        assert!(state.graveyard.cards().iter().any(|c| c.name() == "Requiting Hex"));
+
+        // Case 3: life at 6 or less -> never pay down to 3 or less, discard instead
+        let mut state = GameState::new();
+        state.turn = 2;
+        state.life = 5;
+        state.hand.add_card(db.get_card("Superior Spider-Man").expect("Spidey"));
+        cast_spell(&mut state, &bitter, &db, false, &mut rng).expect("cast should resolve");
+        assert_eq!(state.life, 5, "Does not pay life at 5 life");
+        assert!(state.graveyard.cards().iter().any(|c| c.name() == "Superior Spider-Man"));
+    }
+
+    #[test]
+    fn test_beseech_bargains_enchantment_creature_over_does_machines() {
+        let db = load_db();
+        let mut state = GameState::new();
+        state.turn = 3;
+        state.opponent_life = 5;
+
+        // Lethal combo in the graveyard, Spider-Man in the library
+        state.graveyard.add_card(db.get_card("Bringer of the Last Gift").expect("Bringer"));
+        state.graveyard.add_card(db.get_card("Terror of the Peaks").expect("Terror"));
+        state.library.add_card(db.get_card("Superior Spider-Man").expect("Spidey"));
+        for _ in 0..4 {
+            state.library.add_card(db.get_card("Forest").expect("Forest"));
+        }
+
+        // Both fodder kinds on the battlefield
+        state.battlefield.add_permanent(Permanent::new(
+            db.get_card("Does Machines").expect("Does Machines"), 2));
+        state.battlefield.add_permanent(Permanent::new(
+            db.get_card("Fear of Missing Out").expect("FOMO"), 2));
+
+        let beseech = db.get_card("Beseech the Mirror").expect("Beseech");
+        let mut rng = GameRng::new(Some(11));
+        cast_spell(&mut state, &beseech, &db, false, &mut rng).expect("cast should resolve");
+
+        // The free cast happened (bargain was used)
+        let spidey = state.battlefield.permanents().iter()
+            .find(|p| p.card.name() == "Superior Spider-Man")
+            .expect("Spider-Man should be on the battlefield");
+        assert_eq!(spidey.is_copy_of, Some("Bringer of the Last Gift"));
+
+        // The enchantment creature was the bargain, not Does Machines
+        assert!(
+            state.battlefield.permanents().iter().any(|p| p.card.name() == "Does Machines"),
+            "Does Machines must stay on the battlefield"
+        );
+        assert!(state.graveyard.cards().iter().all(|c| c.name() != "Does Machines"));
+        // FOMO went to the graveyard and the mass reanimate returned it
+        let fomo = state.battlefield.permanents().iter()
+            .find(|p| p.card.name() == "Fear of Missing Out")
+            .expect("FOMO should be back on the battlefield");
+        assert_eq!(fomo.turn_entered, 3, "FOMO re-entered this turn via mass reanimate");
+    }
+
+    #[test]
     fn test_beseech_bargained_casts_spider_man_free() {
         let db = load_db();
         let mut state = GameState::new();

@@ -1431,6 +1431,37 @@ mod tests {
     }
 
     #[test]
+    fn test_deceit_bounce_then_recast_does_machines() {
+        let db = CardDatabase::from_file("cards.json").expect("Failed to load cards");
+        let mut state = GameState::new();
+        state.turn = 3;
+
+        // 4 Islands: 2 pay the {U}{U} evoke, 2 recast the bounced Does Machines
+        let island = db.get_card("Island").expect("Island");
+        for _ in 0..4 {
+            state.battlefield.add_permanent(crate::game::zones::Permanent::new(island.clone(), 1));
+        }
+        state.battlefield.add_permanent(crate::game::zones::Permanent::new(
+            db.get_card("Does Machines").expect("Does Machines"), 1));
+        state.hand.add_card(db.get_card("Deceit").expect("Deceit"));
+        for _ in 0..5 {
+            state.library.add_card(db.get_card("Forest").expect("Forest"));
+        }
+
+        let mut rng = crate::rng::GameRng::new(Some(5));
+        main_phase(&mut state, &db, false, &mut rng);
+
+        // Deceit was evoked, Does Machines was bounced AND recast for its ETB
+        assert!(state.graveyard.cards().iter().any(|c| c.name() == "Deceit"));
+        assert!(
+            state.battlefield.permanents().iter().any(|p| p.card.name() == "Does Machines"),
+            "Does Machines should be recast after the bounce"
+        );
+        // Its ETB ran again: mill 2 + draw 2 = 4 cards left the library
+        assert_eq!(state.library.size(), 1, "Mill 2 and draw 2 from the recast ETB");
+    }
+
+    #[test]
     fn test_starscourge_trigger() {
         let mut state = GameState::new();
         state.turn = 2;
