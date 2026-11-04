@@ -343,8 +343,13 @@ pub fn cast_spell(
                         // Bitter Triumph: additional cost is discard a card or pay 3 life.
                         // Use it as a discard outlet (bin a reanimation target), or pay
                         // the cost with a blank / 3 life when we only want the self-kill.
+                        // Never pay life if it would put us at 3 or less;
+                        // discard the least bad card instead
                         let discard_idx = DecisionEngine::reanimation_target_in_hand(state)
-                            .or_else(|| DecisionEngine::choose_blank_discard(state));
+                            .or_else(|| DecisionEngine::choose_blank_discard(state))
+                            .or_else(|| {
+                                if state.life <= 6 { DecisionEngine::choose_discard(state) } else { None }
+                            });
                         if let Some(idx) = discard_idx {
                             if let Some(discarded) = state.hand.remove_card(idx) {
                                 if verbose {
