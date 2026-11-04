@@ -5,7 +5,7 @@
 use crate::card::{Card, CardDatabase};
 use crate::game::state::GameState;
 use crate::game::mana;
-use crate::game::cards::calculate_combo_damage;
+use crate::game::cards::calculate_two_turn_combo_damage;
 use std::collections::HashMap;
 use std::fmt;
 
@@ -188,8 +188,8 @@ pub fn analyze_turn4_state(state: &GameState) -> Turn4Analysis {
         }
     }
     
-    // Calculate expected damage
-    let combo_damage = calculate_combo_damage(state);
+    // Calculate expected damage over the next two turns (matches the combo gate)
+    let combo_damage = calculate_two_turn_combo_damage(state);
 
     // Determine primary failure reason (in priority order)
     let primary_failure = determine_primary_failure(

@@ -1501,9 +1501,9 @@ fn beseech_plan(state: &GameState) -> Option<(&'static str, bool)> {
     let combo_target_in_gy = has_bringer_in_gy || (has_ardyn_in_gy && other_creatures_in_gy >= 1);
 
     if combo_target_in_gy {
-        // Get Superior Spider-Man; free-cast it only when the combo is lethal
+        // Get Superior Spider-Man; free-cast it only when the combo wins within two turns
         if !in_hand("Superior Spider-Man") && in_library("Superior Spider-Man") {
-            let lethal = has_bringer_in_gy && is_combo_lethal(state);
+            let lethal = has_bringer_in_gy && is_combo_lethal_within_two_turns(state);
             let can_free_cast = (lethal || (has_ardyn_in_gy && !has_bringer_in_gy))
                 && beseech_bargain_fodder(state).is_some();
             return Some(("Superior Spider-Man", can_free_cast));
@@ -1939,8 +1939,9 @@ pub fn calculate_combo_damage(state: &GameState) -> u32 {
         .filter(|c| matches!(c, Card::Creature(_)))
         .collect();
 
-    // Spider-Man copies Bringer (power 6), and Bringer (the copied one) is exiled
-    const BRINGER_POWER: u32 = 6;
+    // User rule: anything Superior Spider-Man copies is a 4/4. The copy enters
+    // as Bringer in name and types, but with Spider-Man's own 4 power.
+    const SPIDER_COPY_POWER: u32 = 4;
 
     // Count Terrors that will be on battlefield after combo
     let terrors_in_graveyard = creatures_in_graveyard
@@ -1969,7 +1970,7 @@ pub fn calculate_combo_damage(state: &GameState) -> u32 {
 
     // Terrors already on battlefield trigger for EACH creature entering (including Spider-Man)
     if terrors_on_battlefield > 0 {
-        terror_damage += BRINGER_POWER * terrors_on_battlefield;
+        terror_damage += SPIDER_COPY_POWER * terrors_on_battlefield;
         for creature in &creatures_in_graveyard {
             if let Card::Creature(c) = creature {
                 terror_damage += c.power * terrors_on_battlefield;
@@ -2054,10 +2055,90 @@ pub fn calculate_combo_damage(state: &GameState) -> u32 {
     terror_damage + current_combat_power + reanimated_demon_combat_power
 }
 
-/// Check if casting the combo NOW would be lethal
-pub fn is_combo_lethal(state: &GameState) -> bool {
-    let expected_damage = calculate_combo_damage(state);
-    expected_damage >= state.opponent_life as u32
+/// Estimate the combat damage of ONE attack step on a turn after the combo.
+///
+/// Models the battlefield after Spider-Man copies Bringer and the mass
+/// reanimate resolves, then sums the power of each creature (goldfish rules:
+/// no blockers, no removal; everything untaps and attacks):
+/// - The Spider-Man that casts the combo. User rule: anything Spider-Man
+///   copies is a 4/4 (the combat model also keeps copies at their own power,
+///   see `simulate_combat`), so it attacks for 4, not for Bringer's 6.
+/// - Every creature in the graveyard except one Bringer (Mind Swap exiles the
+///   copied card); the rest are mass reanimated.
+/// - Every non-impending creature already on the battlefield, including
+///   Starscourge tokens. Bringer's ETB sacrifices them and the mass reanimate
+///   returns them in the same resolution.
+/// - Impending creatures survive the sacrifice. They attack only when their
+///   time counters run out: one counter is removed in each end phase, so a
+///   permanent with more than one counter cannot attack on the next turn.
+/// - Dark Matter Manipulator gets +2 power for each 7 cards in the graveyard.
+///   The estimate uses the cards that stay in the graveyard after the
+///   reanimate (non-creature cards). Mills during the resolution only add
+///   more, so this is a lower bound.
+pub fn calculate_next_turn_damage(state: &GameState) -> u32 {
+    const SPIDER_MAN_POWER: u32 = 4;
+
+    // Graveyard after the combo: creatures leave (reanimated or exiled),
+    // non-creature cards stay.
+    let noncreature_gy = state
+        .graveyard
+        .cards()
+        .iter()
+        .filter(|c| !matches!(c, Card::Creature(_)))
+        .count() as u32;
+    let dmm_bonus = 2 * (noncreature_gy / 7);
+
+    // The Spider-Man that copies Bringer
+    let mut total = SPIDER_MAN_POWER;
+
+    // Creatures mass reanimated from the graveyard (all but the exiled Bringer)
+    let mut copied_bringer_skipped = false;
+    for card in state.graveyard.cards() {
+        if let Card::Creature(c) = card {
+            if !copied_bringer_skipped && c.base.name == "Bringer of the Last Gift" {
+                copied_bringer_skipped = true; // Mind Swap exiles the copied card
+                continue;
+            }
+            total += c.power;
+            if c.base.name == "Dark Matter Manipulator" {
+                total += dmm_bonus;
+            }
+        }
+    }
+
+    // Creatures already on the battlefield: non-impending ones are sacrificed
+    // and reanimated as fresh non-copies; impending ones survive as they are.
+    for perm in state.battlefield.permanents() {
+        if let Card::Creature(c) = &perm.card {
+            let time_counters = perm.get_counter(CounterType::Time);
+            if time_counters > 1 {
+                continue; // still impending during the next turn's combat
+            }
+            total += c.power;
+            if time_counters == 0 && c.base.name == "Dark Matter Manipulator" {
+                total += dmm_bonus;
+            }
+        }
+    }
+
+    total
+}
+
+/// Estimate the total damage when the combo is cast NOW and the game runs for
+/// two more turns: the immediate damage (Terror triggers plus this turn's
+/// attack), plus the post-combo board attacking on each of the two following
+/// turns.
+pub fn calculate_two_turn_combo_damage(state: &GameState) -> u32 {
+    calculate_combo_damage(state) + 2 * calculate_next_turn_damage(state)
+}
+
+/// Check if casting the combo NOW wins within two turns (goldfish rules: no
+/// blockers and no removal). A win this turn also passes, so the engine never
+/// waits when an immediate kill is available: the same action (cast the
+/// combo) is taken, and the engine always attacks for maximum damage, so the
+/// sooner win is taken automatically.
+pub fn is_combo_lethal_within_two_turns(state: &GameState) -> bool {
+    calculate_two_turn_combo_damage(state) >= state.opponent_life as u32
 }
 
 
@@ -2165,6 +2246,7 @@ pub fn resolve_saga_chapter(state: &mut GameState, saga_name: &str, chapter: u32
 mod combo_damage_tests {
     use super::*;
     use crate::card::types::BaseCard;
+    use crate::card::types::SpellCard;
     use crate::card::{CreatureCard, ManaCost};
     use crate::game::zones::Permanent;
 
@@ -2218,8 +2300,9 @@ mod combo_damage_tests {
         state.graveyard.add_card(bringer);
 
         let damage = calculate_combo_damage(&state);
-        // Terror on battlefield triggers for Spider-Man (6 power) + Bringer (6 power) = 12 damage
-        assert_eq!(damage, 12);
+        // Terror on battlefield triggers for the Spider-Man copy (4 power,
+        // user rule) + Bringer (6 power) = 10 damage
+        assert_eq!(damage, 10);
     }
 
     #[test]
@@ -2329,100 +2412,103 @@ mod combo_damage_tests {
         assert_eq!(damage, 0);
     }
 
-    #[test]
-    fn test_is_combo_lethal_true() {
-        let mut state = GameState::new();
-        state.opponent_life = 10;
-
-        // Add Terror to battlefield
-        let terror = Card::Creature(CreatureCard {
+    /// Build a bare creature card for tests
+    fn test_creature(name: &str, power: u32) -> Card {
+        Card::Creature(CreatureCard {
             base: BaseCard {
-                name: "Terror of the Peaks".to_string(),
+                name: name.to_string(),
                 mana_cost: ManaCost::default(),
-                mana_value: 4,
+                mana_value: 0,
             },
-            power: 3,
-            toughness: 3,
+            power,
+            toughness: power,
             is_legendary: false,
             creature_types: vec![],
             abilities: vec![],
             impending_cost: None,
             impending_counters: None,
-        });
-
-        let permanent = Permanent::new(terror, 1);
-        state.battlefield.add_permanent(permanent);
-
-        // Add Bringer to graveyard
-        let bringer = Card::Creature(CreatureCard {
-            base: BaseCard {
-                name: "Bringer of the Last Gift".to_string(),
-                mana_cost: ManaCost::default(),
-                mana_value: 6,
-            },
-            power: 6,
-            toughness: 6,
-            is_legendary: false,
-            creature_types: vec![],
-            abilities: vec![],
-            impending_cost: None,
-            impending_counters: None,
-        });
-
-        state.graveyard.add_card(bringer);
-
-        // Damage = 12 (Terror triggers for Spider-Man 6 + Bringer 6)
-        // Opponent life = 10
-        // 12 >= 10 = true
-        assert!(is_combo_lethal(&state));
+        })
     }
 
     #[test]
-    fn test_is_combo_lethal_false() {
+    fn test_terror_trigger_counts_spider_copy_as_4_power() {
+        // User rule: anything Spider-Man copies is a 4/4. A Terror on the
+        // battlefield triggers for the entering Spider-Man copy with 4 power,
+        // not with Bringer's 6.
+        let mut state = GameState::new();
+        let terror = Permanent::new(test_creature("Terror of the Peaks", 5), 1);
+        state.battlefield.add_permanent(terror);
+        state.graveyard.add_card(test_creature("Bringer of the Last Gift", 6));
+
+        // Spider-Man copy 4 + reanimated Bringer 6, one Terror = 10
+        assert_eq!(calculate_combo_damage(&state), 10);
+    }
+
+    #[test]
+    fn test_two_turn_gate_yes_when_one_turn_gate_says_no() {
+        // Spider-Man in hand, Bringer and Valgavoth in the graveyard, no
+        // Terror, opponent at 20. No damage this turn, but the post-combo
+        // board (Spider-Man 4 + Valgavoth 9 = 13 per attack) wins within two
+        // turns. The old one-turn gate said no; the new gate says yes.
         let mut state = GameState::new();
         state.opponent_life = 20;
+        state.hand.add_card(test_creature("Superior Spider-Man", 4));
+        state.graveyard.add_card(test_creature("Bringer of the Last Gift", 6));
+        state.graveyard.add_card(test_creature("Valgavoth, Terror Eater", 9));
 
-        // Add Terror to battlefield
-        let terror = Card::Creature(CreatureCard {
-            base: BaseCard {
-                name: "Terror of the Peaks".to_string(),
-                mana_cost: ManaCost::default(),
-                mana_value: 4,
-            },
-            power: 3,
-            toughness: 3,
-            is_legendary: false,
-            creature_types: vec![],
-            abilities: vec![],
-            impending_cost: None,
-            impending_counters: None,
-        });
+        // Old one-turn answer: no Terror, nothing attacks this turn -> 0 damage
+        assert_eq!(calculate_combo_damage(&state), 0);
+        assert!(calculate_combo_damage(&state) < state.opponent_life as u32);
 
-        let permanent = Permanent::new(terror, 1);
-        state.battlefield.add_permanent(permanent);
+        // The copied Bringer is exiled; Valgavoth and Spider-Man attack
+        assert_eq!(calculate_next_turn_damage(&state), 13);
+        assert!(is_combo_lethal_within_two_turns(&state));
+    }
 
-        // Add Bringer to graveyard
-        let bringer = Card::Creature(CreatureCard {
-            base: BaseCard {
-                name: "Bringer of the Last Gift".to_string(),
-                mana_cost: ManaCost::default(),
-                mana_value: 6,
-            },
-            power: 6,
-            toughness: 6,
-            is_legendary: false,
-            creature_types: vec![],
-            abilities: vec![],
-            impending_cost: None,
-            impending_counters: None,
-        });
+    #[test]
+    fn test_two_turn_gate_no_when_board_too_small() {
+        // Only Bringer in the graveyard: after the combo the board is one
+        // Spider-Man copy (4 power). 8 damage in two turns < 20 life.
+        let mut state = GameState::new();
+        state.opponent_life = 20;
+        state.graveyard.add_card(test_creature("Bringer of the Last Gift", 6));
 
-        state.graveyard.add_card(bringer);
+        assert_eq!(calculate_next_turn_damage(&state), 4);
+        assert!(!is_combo_lethal_within_two_turns(&state));
+    }
 
-        // Damage = 12 (Terror triggers for Spider-Man 6 + Bringer 6)
-        // Opponent life = 20
-        // 12 >= 20 = false
-        assert!(!is_combo_lethal(&state));
+    #[test]
+    fn test_next_turn_damage_impending_and_dmm_bonus() {
+        let mut state = GameState::new();
+
+        // Impending Overlord with 4 time counters: cannot attack next turn
+        let mut overlord_far = Permanent::new(test_creature("Overlord of the Balemurk", 5), 1);
+        overlord_far.add_counter(CounterType::Time, 4);
+        state.battlefield.add_permanent(overlord_far);
+
+        // Impending Overlord with 1 time counter: the counter is removed in
+        // this turn's end phase, so it attacks next turn
+        let mut overlord_near = Permanent::new(test_creature("Overlord of the Balemurk", 5), 1);
+        overlord_near.add_counter(CounterType::Time, 1);
+        state.battlefield.add_permanent(overlord_near);
+
+        // Graveyard: the copied Bringer (exiled, not counted), a Dark Matter
+        // Manipulator, and 14 non-creature cards (stay after the reanimate)
+        state.graveyard.add_card(test_creature("Bringer of the Last Gift", 6));
+        state.graveyard.add_card(test_creature("Dark Matter Manipulator", 1));
+        for _ in 0..14 {
+            state.graveyard.add_card(Card::Sorcery(SpellCard {
+                base: BaseCard {
+                    name: "Bitter Triumph".to_string(),
+                    mana_cost: ManaCost::default(),
+                    mana_value: 2,
+                },
+                abilities: vec![],
+            }));
+        }
+
+        // Spider-Man 4 + near Overlord 5 + DMM 1 + bonus 2*(14/7)=4 = 14
+        assert_eq!(calculate_next_turn_damage(&state), 14);
     }
 
     #[test]
@@ -2470,9 +2556,9 @@ mod combo_damage_tests {
         state.graveyard.add_card(bringer);
 
         let damage = calculate_combo_damage(&state);
-        // Each Terror triggers for Spider-Man (6) + Bringer (6) = 12 per Terror
-        // 2 Terrors = 24 damage
-        assert_eq!(damage, 24);
+        // Each Terror triggers for the Spider-Man copy (4, user rule) +
+        // Bringer (6) = 10 per Terror; 2 Terrors = 20 damage
+        assert_eq!(damage, 20);
     }
 }
 

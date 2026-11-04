@@ -703,8 +703,8 @@ pub fn main_phase(state: &mut GameState, db: &CardDatabase, verbose: bool, rng: 
         let has_terror_in_hand = state.hand.cards().iter()
             .any(|c| c.name() == "Terror of the Peaks");
 
-        // Check if the combo would be lethal
-        let combo_is_lethal = has_bringer_in_graveyard && cards::is_combo_lethal(state);
+        // Check if the combo would win within two turns
+        let combo_is_lethal = has_bringer_in_graveyard && cards::is_combo_lethal_within_two_turns(state);
         let has_spider_man_in_hand = state.hand.cards().iter()
             .any(|c| c.name() == "Superior Spider-Man");
         let has_reanimation_target_in_hand =
@@ -713,9 +713,10 @@ pub fn main_phase(state: &mut GameState, db: &CardDatabase, verbose: bool, rng: 
         // Log when we're holding back the combo
         if verbose && has_bringer_in_graveyard && has_spider_man_in_hand && !combo_is_lethal {
             let expected_damage = cards::calculate_combo_damage(state);
+            let next_turn_damage = cards::calculate_next_turn_damage(state);
             println!(
-                "  [Waiting] Combo not lethal yet (expected: {} damage, need: {})",
-                expected_damage, state.opponent_life
+                "  [Waiting] Combo not lethal within two turns (this turn: {}, per turn after: {}, need: {})",
+                expected_damage, next_turn_damage, state.opponent_life
             );
         }
 
