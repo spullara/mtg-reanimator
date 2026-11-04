@@ -1461,8 +1461,9 @@ fn bitter_triumph_self_kill_target(state: &GameState) -> Option<usize> {
 /// Bargain fodder for Beseech the Mirror, best first.
 /// Enchantment creatures are the best bargain because the mass reanimate returns
 /// them: an impending Overlord (sacrificing it even upgrades it to a full
-/// creature), then Fear of Missing Out, then a flipped Overlord. Sacrifice Does
-/// Machines only when no enchantment creature is available.
+/// creature), then Fear of Missing Out, then a flipped Overlord. After the
+/// enchantment creatures comes Grim Bauble (an artifact; best once its surveil
+/// is used or when no mana is free for it), and Does Machines is last.
 pub fn beseech_bargain_fodder(state: &GameState) -> Option<usize> {
     let perms = state.battlefield.permanents();
     if let Some(i) = perms.iter().position(|p| {
@@ -1479,6 +1480,11 @@ pub fn beseech_bargain_fodder(state: &GameState) -> Option<usize> {
     }
     if let Some(i) = perms.iter().position(|p| {
         p.card.name() == "Overlord of the Balemurk" && p.is_copy_of.is_none()
+    }) {
+        return Some(i);
+    }
+    if let Some(i) = perms.iter().position(|p| {
+        p.card.name() == "Grim Bauble" && p.is_copy_of.is_none()
     }) {
         return Some(i);
     }
@@ -2708,13 +2714,15 @@ mod new_card_tests {
         assert_eq!(state.life, 17, "Pays life to keep Spider-Man");
         assert!(state.hand.cards().iter().any(|c| c.name() == "Superior Spider-Man"));
 
-        // Case 2: a blank in hand -> discard it, keep the life
+        // Case 2: a blank in hand (an excess land) -> discard it, keep the life
         let mut state = GameState::new();
         state.turn = 2;
-        state.hand.add_card(db.get_card("Requiting Hex").expect("Hex"));
+        for _ in 0..3 {
+            state.hand.add_card(db.get_card("Forest").expect("Forest"));
+        }
         cast_spell(&mut state, &bitter, &db, false, &mut rng).expect("cast should resolve");
         assert_eq!(state.life, 20, "Discards the blank instead of paying life");
-        assert!(state.graveyard.cards().iter().any(|c| c.name() == "Requiting Hex"));
+        assert!(state.graveyard.cards().iter().any(|c| c.name() == "Forest"));
 
         // Case 3: life at 6 or less -> never pay down to 3 or less, discard instead
         let mut state = GameState::new();
@@ -2768,6 +2776,46 @@ mod new_card_tests {
             .find(|p| p.card.name() == "Fear of Missing Out")
             .expect("FOMO should be back on the battlefield");
         assert_eq!(fomo.turn_entered, 3, "FOMO re-entered this turn via mass reanimate");
+    }
+
+    #[test]
+    fn test_beseech_bargains_grim_bauble_over_does_machines() {
+        let db = load_db();
+        let mut state = GameState::new();
+        state.turn = 3;
+        state.opponent_life = 5;
+
+        // Lethal combo in the graveyard, Spider-Man in the library
+        state.graveyard.add_card(db.get_card("Bringer of the Last Gift").expect("Bringer"));
+        state.graveyard.add_card(db.get_card("Terror of the Peaks").expect("Terror"));
+        state.library.add_card(db.get_card("Superior Spider-Man").expect("Spidey"));
+        for _ in 0..4 {
+            state.library.add_card(db.get_card("Forest").expect("Forest"));
+        }
+
+        // No enchantment creature available: the Bauble outranks Does Machines
+        state.battlefield.add_permanent(Permanent::new(
+            db.get_card("Does Machines").expect("Does Machines"), 2));
+        state.battlefield.add_permanent(Permanent::new(
+            db.get_card("Grim Bauble").expect("Grim Bauble"), 2));
+
+        let beseech = db.get_card("Beseech the Mirror").expect("Beseech");
+        let mut rng = GameRng::new(Some(11));
+        cast_spell(&mut state, &beseech, &db, false, &mut rng).expect("cast should resolve");
+
+        // The free cast happened (bargain was used)
+        let spidey = state.battlefield.permanents().iter()
+            .find(|p| p.card.name() == "Superior Spider-Man")
+            .expect("Spider-Man should be on the battlefield");
+        assert_eq!(spidey.is_copy_of, Some("Bringer of the Last Gift"));
+
+        // Grim Bauble was the bargain, not Does Machines
+        assert!(state.battlefield.permanents().iter().all(|p| p.card.name() != "Grim Bauble"));
+        assert!(state.graveyard.cards().iter().any(|c| c.name() == "Grim Bauble"));
+        assert!(
+            state.battlefield.permanents().iter().any(|p| p.card.name() == "Does Machines"),
+            "Does Machines must stay on the battlefield"
+        );
     }
 
     #[test]

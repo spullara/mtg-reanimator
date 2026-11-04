@@ -578,6 +578,15 @@
     ]
   },
   {
+    "name": "Grim Bauble",
+    "card_type": "enchantment",
+    "mana_cost": {
+      "black": 1
+    },
+    "mana_value": 1,
+    "abilities": []
+  },
+  {
     "name": "Does Machines",
     "card_type": "enchantment",
     "mana_cost": {

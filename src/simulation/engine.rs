@@ -729,11 +729,6 @@ pub fn main_phase(state: &mut GameState, db: &CardDatabase, verbose: bool, rng: 
                     return false;
                 }
 
-                // Requiting Hex is removal only - a blank with no opponent creatures
-                if c.name() == "Requiting Hex" {
-                    return false;
-                }
-
                 // Deceit is always evoked for {U/B}{U/B} (put a creature into the
                 // graveyard); never hard-cast it
                 if c.name() == "Deceit" {
@@ -1040,6 +1035,68 @@ pub fn main_phase(state: &mut GameState, db: &CardDatabase, verbose: bool, rng: 
                 }
                 state.library.add_card(card);
                 state.library.shuffle(rng);
+            }
+        }
+    }
+
+    // STEP 5: Grim Bauble surveil 2 ({2}{B}, {T}, Sacrifice). An artifact has no
+    // summoning sickness, so it can activate the turn it enters. This runs after
+    // every better play, so only spare mana is spent on it.
+    loop {
+        let bauble_idx = state.battlefield.permanents().iter().position(|p| {
+            p.card.name() == "Grim Bauble" && !p.tapped && p.is_copy_of.is_none()
+        });
+        let Some(idx) = bauble_idx else { break };
+
+        let cost = ManaCost { black: 1, generic: 2, ..Default::default() };
+        if !mana::can_afford_cost(&cost, state, None) || !mana::tap_lands_for_cost(&cost, state, None) {
+            break;
+        }
+
+        if let Some(perm) = state.battlefield.remove_permanent(idx) {
+            if verbose {
+                println!("  [Activate] Grim Bauble: {{2}}{{B}}, tap, sacrifice -> Surveil 2");
+            }
+            // The sacrifice is part of the cost: the Bauble is in the graveyard
+            // before the surveil resolves
+            state.graveyard.add_card(perm.card);
+            cards::resolve_surveil(state, 2, verbose);
+        }
+    }
+
+    // STEP 6: Does Machines level 2 ({1}{U}, sorcery speed): with spare mana and
+    // a Grim Bauble in the graveyard, level up and return up to two Grim Baubles
+    // to hand. Level 3 is out of scope.
+    let has_bauble_in_gy = state.graveyard.cards().iter().any(|c| c.name() == "Grim Bauble");
+    if has_bauble_in_gy {
+        let class_idx = state.battlefield.permanents().iter().position(|p| {
+            p.card.name() == "Does Machines"
+                && p.is_copy_of.is_none()
+                && p.get_counter(crate::game::zones::CounterType::Level) == 0
+        });
+        if let Some(idx) = class_idx {
+            let cost = ManaCost { blue: 1, generic: 1, ..Default::default() };
+            if mana::can_afford_cost(&cost, state, None) && mana::tap_lands_for_cost(&cost, state, None) {
+                state.battlefield.permanents_mut()[idx]
+                    .add_counter(crate::game::zones::CounterType::Level, 1);
+                if verbose {
+                    println!("  [Activate] Does Machines: {{1}}{{U}} -> level 2");
+                }
+
+                let mut returned = 0;
+                while returned < 2 {
+                    let Some(gy_idx) = state.graveyard.cards().iter()
+                        .position(|c| c.name() == "Grim Bauble") else { break };
+                    if let Some(card) = state.graveyard.remove_card(gy_idx) {
+                        if verbose {
+                            println!("    Level 2: returned {} to hand", card.name());
+                        }
+                        state.hand.add_card(card);
+                        returned += 1;
+                    } else {
+                        break;
+                    }
+                }
             }
         }
     }
@@ -1460,6 +1517,123 @@ mod tests {
         );
         // Its ETB ran again: mill 2 + draw 2 = 4 cards left the library
         assert_eq!(state.library.size(), 1, "Mill 2 and draw 2 from the recast ETB");
+    }
+
+    #[test]
+    fn test_grim_bauble_surveil_puts_bringer_in_graveyard() {
+        let db = CardDatabase::from_file("cards.json").expect("Failed to load cards");
+        let mut state = GameState::new();
+        state.turn = 2;
+
+        // 3 Swamps pay {2}{B}; the Bauble entered THIS turn (artifacts have no
+        // summoning sickness)
+        let swamp = db.get_card("Swamp").expect("Swamp");
+        for _ in 0..3 {
+            state.battlefield.add_permanent(crate::game::zones::Permanent::new(swamp.clone(), 1));
+        }
+        state.battlefield.add_permanent(crate::game::zones::Permanent::new(
+            db.get_card("Grim Bauble").expect("Grim Bauble"), 2));
+
+        // Bringer is on top of the library, a Forest under it
+        state.library.add_card(db.get_card("Bringer of the Last Gift").expect("Bringer"));
+        state.library.add_card(db.get_card("Forest").expect("Forest"));
+
+        let mut rng = crate::rng::GameRng::new(Some(5));
+        main_phase(&mut state, &db, false, &mut rng);
+
+        assert!(
+            state.graveyard.cards().iter().any(|c| c.name() == "Bringer of the Last Gift"),
+            "Surveil 2 should put Bringer into the graveyard"
+        );
+        assert!(
+            state.graveyard.cards().iter().any(|c| c.name() == "Grim Bauble"),
+            "The sacrificed Bauble goes to the graveyard"
+        );
+        assert!(state.battlefield.permanents().iter().all(|p| p.card.name() != "Grim Bauble"));
+        assert_eq!(state.library.size(), 1, "The Forest stays on top of the library");
+    }
+
+    #[test]
+    fn test_grim_bauble_not_activated_without_spare_mana() {
+        let db = CardDatabase::from_file("cards.json").expect("Failed to load cards");
+        let mut state = GameState::new();
+        state.turn = 2;
+
+        // Only 2 Swamps: {2}{B} is not affordable
+        let swamp = db.get_card("Swamp").expect("Swamp");
+        for _ in 0..2 {
+            state.battlefield.add_permanent(crate::game::zones::Permanent::new(swamp.clone(), 1));
+        }
+        state.battlefield.add_permanent(crate::game::zones::Permanent::new(
+            db.get_card("Grim Bauble").expect("Grim Bauble"), 2));
+        state.library.add_card(db.get_card("Forest").expect("Forest"));
+
+        let mut rng = crate::rng::GameRng::new(Some(5));
+        main_phase(&mut state, &db, false, &mut rng);
+
+        assert!(
+            state.battlefield.permanents().iter().any(|p| p.card.name() == "Grim Bauble"),
+            "The Bauble stays when the surveil cannot be paid"
+        );
+    }
+
+    #[test]
+    fn test_does_machines_level_2_returns_two_baubles() {
+        let db = CardDatabase::from_file("cards.json").expect("Failed to load cards");
+        let mut state = GameState::new();
+        state.turn = 3;
+
+        let island = db.get_card("Island").expect("Island");
+        for _ in 0..2 {
+            state.battlefield.add_permanent(crate::game::zones::Permanent::new(island.clone(), 1));
+        }
+        state.battlefield.add_permanent(crate::game::zones::Permanent::new(
+            db.get_card("Does Machines").expect("Does Machines"), 1));
+
+        let bauble = db.get_card("Grim Bauble").expect("Grim Bauble");
+        state.graveyard.add_card(bauble.clone());
+        state.graveyard.add_card(bauble.clone());
+
+        let mut rng = crate::rng::GameRng::new(Some(5));
+        main_phase(&mut state, &db, false, &mut rng);
+
+        let baubles_in_hand = state.hand.cards().iter()
+            .filter(|c| c.name() == "Grim Bauble")
+            .count();
+        assert_eq!(baubles_in_hand, 2, "Level 2 returns up to two Grim Baubles to hand");
+        assert!(state.graveyard.cards().iter().all(|c| c.name() != "Grim Bauble"));
+
+        let class = state.battlefield.permanents().iter()
+            .find(|p| p.card.name() == "Does Machines")
+            .expect("Does Machines stays on the battlefield");
+        assert_eq!(class.get_counter(crate::game::zones::CounterType::Level), 1,
+            "The Class is marked as level 2");
+    }
+
+    #[test]
+    fn test_does_machines_does_not_level_without_bauble_in_graveyard() {
+        let db = CardDatabase::from_file("cards.json").expect("Failed to load cards");
+        let mut state = GameState::new();
+        state.turn = 3;
+
+        let island = db.get_card("Island").expect("Island");
+        for _ in 0..2 {
+            state.battlefield.add_permanent(crate::game::zones::Permanent::new(island.clone(), 1));
+        }
+        state.battlefield.add_permanent(crate::game::zones::Permanent::new(
+            db.get_card("Does Machines").expect("Does Machines"), 1));
+
+        let mut rng = crate::rng::GameRng::new(Some(5));
+        main_phase(&mut state, &db, false, &mut rng);
+
+        let class = state.battlefield.permanents().iter()
+            .find(|p| p.card.name() == "Does Machines")
+            .expect("Does Machines stays on the battlefield");
+        assert_eq!(class.get_counter(crate::game::zones::CounterType::Level), 0,
+            "No level up without a Grim Bauble to return");
+        assert!(state.battlefield.permanents().iter()
+            .filter(|p| matches!(p.card, Card::Land(_)))
+            .all(|p| !p.tapped), "No mana spent");
     }
 
     #[test]

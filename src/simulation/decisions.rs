@@ -29,12 +29,8 @@ impl DecisionEngine {
     }
 
     /// Find a blank card in hand that we are happy to discard:
-    /// Requiting Hex, an extra Bitter Triumph, or an excess land (keep 2 for land drops)
+    /// an extra Bitter Triumph, or an excess land (keep 2 for land drops)
     pub fn choose_blank_discard(state: &GameState) -> Option<usize> {
-        if let Some(idx) = state.hand.cards().iter().position(|c| c.name() == "Requiting Hex") {
-            return Some(idx);
-        }
-
         let bitter_count = state.hand.cards().iter()
             .filter(|c| c.name() == "Bitter Triumph")
             .count();
@@ -57,7 +53,7 @@ impl DecisionEngine {
 
     /// Choose which card to discard for a mandatory discard.
     /// Priority: reanimation targets (the plan wants them in the graveyard),
-    /// then blanks (Requiting Hex, extra Bitter Triumph, excess lands),
+    /// then blanks (extra Bitter Triumph, excess lands),
     /// then the last card that is not Superior Spider-Man.
     pub fn choose_discard(state: &GameState) -> Option<usize> {
         if state.hand.size() == 0 {

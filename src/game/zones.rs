@@ -1,10 +1,12 @@
 use crate::card::Card;
 use std::collections::HashMap;
 
-/// Counter types for permanents (e.g., time counters for impending creatures)
+/// Counter types for permanents (e.g., time counters for impending creatures,
+/// level counters for Class enchantments like Does Machines)
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum CounterType {
     Time,
+    Level,
 }
 
 /// A permanent on the battlefield with state tracking

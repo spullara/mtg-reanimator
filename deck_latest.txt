@@ -13,7 +13,7 @@ Deck
 1 Valgavoth, Terror Eater (DSK) 120
 2 Deceit (ECL) 212
 1 Marang River Regent (TDM) 51
-2 Requiting Hex (ECL) 116
+2 Grim Bauble (DFT) 88
 3 Bitter Triumph (LCI) 91
 4 Watery Grave (EOE) 261
 4 Blood Crypt (RNA) 245
