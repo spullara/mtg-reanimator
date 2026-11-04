@@ -1461,9 +1461,11 @@ fn bitter_triumph_self_kill_target(state: &GameState) -> Option<usize> {
 /// Bargain fodder for Beseech the Mirror, best first.
 /// Enchantment creatures are the best bargain because the mass reanimate returns
 /// them: an impending Overlord (sacrificing it even upgrades it to a full
-/// creature), then Fear of Missing Out, then a flipped Overlord. After the
-/// enchantment creatures comes Grim Bauble (an artifact; best once its surveil
-/// is used or when no mana is free for it), and Does Machines is last.
+/// creature), then Fear of Missing Out, then a flipped Overlord. Surveil and
+/// bargain are an either/or choice for each Grim Bauble (the surveil sacrifices
+/// it): bargain a Bauble before Does Machines only when no mana is free for its
+/// surveil this turn. When the surveil is affordable, keep the Bauble for it,
+/// bargain Does Machines instead, and use the Bauble only as a last resort.
 pub fn beseech_bargain_fodder(state: &GameState) -> Option<usize> {
     let perms = state.battlefield.permanents();
     if let Some(i) = perms.iter().position(|p| {
@@ -1483,12 +1485,18 @@ pub fn beseech_bargain_fodder(state: &GameState) -> Option<usize> {
     }) {
         return Some(i);
     }
-    if let Some(i) = perms.iter().position(|p| {
+    let bauble_idx = perms.iter().position(|p| {
         p.card.name() == "Grim Bauble" && p.is_copy_of.is_none()
-    }) {
-        return Some(i);
+    });
+    if bauble_idx.is_some() {
+        let surveil_cost = ManaCost { black: 1, generic: 2, ..Default::default() };
+        let surveil_affordable = crate::game::mana::can_afford_cost(&surveil_cost, state, None);
+        if !surveil_affordable {
+            return bauble_idx;
+        }
     }
     perms.iter().position(|p| p.card.name() == "Does Machines" && p.is_copy_of.is_none())
+        .or(bauble_idx)
 }
 
 /// Decide what Beseech the Mirror would fetch right now.
@@ -2793,7 +2801,8 @@ mod new_card_tests {
             state.library.add_card(db.get_card("Forest").expect("Forest"));
         }
 
-        // No enchantment creature available: the Bauble outranks Does Machines
+        // No enchantment creature available, and no mana is free for the
+        // Bauble's surveil: the Bauble outranks Does Machines
         state.battlefield.add_permanent(Permanent::new(
             db.get_card("Does Machines").expect("Does Machines"), 2));
         state.battlefield.add_permanent(Permanent::new(
@@ -2816,6 +2825,42 @@ mod new_card_tests {
             state.battlefield.permanents().iter().any(|p| p.card.name() == "Does Machines"),
             "Does Machines must stay on the battlefield"
         );
+    }
+
+    #[test]
+    fn test_beseech_keeps_bauble_for_surveil_when_mana_is_free() {
+        let db = load_db();
+        let mut state = GameState::new();
+        state.turn = 3;
+        state.opponent_life = 5;
+
+        // Lethal combo in the graveyard, Spider-Man in the library
+        state.graveyard.add_card(db.get_card("Bringer of the Last Gift").expect("Bringer"));
+        state.graveyard.add_card(db.get_card("Terror of the Peaks").expect("Terror"));
+        state.library.add_card(db.get_card("Superior Spider-Man").expect("Spidey"));
+        for _ in 0..4 {
+            state.library.add_card(db.get_card("Forest").expect("Forest"));
+        }
+
+        // Spare mana pays the Bauble's surveil this turn: the either/or choice
+        // keeps the Bauble and bargains Does Machines instead
+        let swamp = db.get_card("Swamp").expect("Swamp");
+        for _ in 0..3 {
+            state.battlefield.add_permanent(Permanent::new(swamp.clone(), 1));
+        }
+        state.battlefield.add_permanent(Permanent::new(
+            db.get_card("Does Machines").expect("Does Machines"), 2));
+        state.battlefield.add_permanent(Permanent::new(
+            db.get_card("Grim Bauble").expect("Grim Bauble"), 2));
+
+        let beseech = db.get_card("Beseech the Mirror").expect("Beseech");
+        let mut rng = GameRng::new(Some(11));
+        cast_spell(&mut state, &beseech, &db, false, &mut rng).expect("cast should resolve");
+
+        // Does Machines was the bargain; the Bauble stays for its surveil
+        assert!(state.battlefield.permanents().iter().any(|p| p.card.name() == "Grim Bauble"));
+        assert!(state.battlefield.permanents().iter().all(|p| p.card.name() != "Does Machines"));
+        assert!(state.graveyard.cards().iter().any(|c| c.name() == "Does Machines"));
     }
 
     #[test]
