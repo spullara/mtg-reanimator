@@ -193,25 +193,64 @@ impl DecisionEngine {
 
         let provides_missing = |land: &LandCard| land.colors.iter().any(|c| missing_colors.contains(c));
 
-        let can_cast_this_turn = |land: &LandCard| -> bool {
+        // A land that enters tapped now AND on every later turn (Undercity
+        // Sewers, Pit of Offerings, Starting Town after turn 3). Playing it on a
+        // turn that does not need the mana costs nothing.
+        let always_tapped = |land: &LandCard| -> bool {
+            match land.subtype {
+                LandSubtype::Town => state.turn > 3,
+                LandSubtype::Slowland | LandSubtype::Fastland => false,
+                _ => enters_tapped(land),
+            }
+        };
+        // Starting Town on turns 1-3: untapped now, tapped later. Use it first.
+        let expiring = |land: &LandCard| land.subtype == LandSubtype::Town && state.turn <= 3;
+
+        // Does the land drop make a spell castable that is not castable without it?
+        let castable_without_drop = |spell: &&Card| {
+            spell.mana_value() <= mana_available && Self::has_colors(spell, &colors_available)
+        };
+        let enables_new_spell = |land: &LandCard| -> bool {
             if enters_tapped(land) { return false; }
             let mut colors_after = colors_available.clone();
             for color in &land.colors { colors_after.insert(*color); }
             spells_in_hand.iter().any(|spell| {
-                spell.mana_value() <= mana_after_land_drop && Self::has_colors(spell, &colors_after)
+                !castable_without_drop(spell)
+                    && spell.mana_value() <= mana_after_land_drop
+                    && Self::has_colors(spell, &colors_after)
             })
         };
 
-        let mut sorted = lands.clone();
-        sorted.sort_by(|a, b| {
-            let (a_land, b_land) = match (a.1, b.1) {
-                (Card::Land(al), Card::Land(bl)) => (al, bl),
-                _ => return std::cmp::Ordering::Equal,
-            };
-            Self::compare_lands(a_land, b_land, &enters_tapped, &provides_missing, &can_cast_this_turn)
-        });
+        let mana_needed = lands.iter().any(|(_, c)| matches!(c, Card::Land(l) if enables_new_spell(l)));
 
-        sorted.first().map(|(idx, _)| *idx)
+        // Rank: lower is better
+        let rank = |land: &LandCard| -> (u8, u8, u8, i64) {
+            let miss = if provides_missing(land) { 0 } else { 1 };
+            let surveil = if land.has_surveil { 0 } else { 1 };
+            let colors = -(land.colors.len() as i64);
+            if mana_needed {
+                // Play an untapped land that enables the spell; spend the
+                // Starting Town that would be tapped later first.
+                let tier = if !enables_new_spell(land) { 3 }
+                    else if expiring(land) { 0 }
+                    else if land.subtype == LandSubtype::Slowland { 1 }
+                    else { 2 };
+                (tier, miss, surveil, colors)
+            } else {
+                // The mana is not needed: play the lands that would be tapped
+                // later anyway, and save untapped lands for the combo turn.
+                let tier = if always_tapped(land) { 0 }
+                    else if expiring(land) { 1 }
+                    else if enters_tapped(land) { 3 } // slowland that is tapped now
+                    else { 2 };
+                (tier, miss, surveil, colors)
+            }
+        };
+
+        lands.iter()
+            .filter_map(|(idx, c)| match c { Card::Land(l) => Some((*idx, rank(l))), _ => None })
+            .min_by(|a, b| a.1.cmp(&b.1))
+            .map(|(idx, _)| idx)
     }
 
     fn add_missing_colors(spell: &Card, available: &HashSet<ManaColor>, missing: &mut HashSet<ManaColor>) {
@@ -242,25 +281,6 @@ impl DecisionEngine {
             && (cost.black == 0 || colors.contains(&ManaColor::Black))
             && (cost.red == 0 || colors.contains(&ManaColor::Red))
             && (cost.green == 0 || colors.contains(&ManaColor::Green))
-    }
-
-    fn compare_lands<F1, F2, F3>(a: &LandCard, b: &LandCard, enters_tapped: &F1, provides_missing: &F2, can_cast: &F3) -> std::cmp::Ordering
-    where F1: Fn(&LandCard) -> bool, F2: Fn(&LandCard) -> bool, F3: Fn(&LandCard) -> bool,
-    {
-        let (a_cast, b_cast) = (can_cast(a), can_cast(b));
-        if a_cast != b_cast { return if a_cast { std::cmp::Ordering::Less } else { std::cmp::Ordering::Greater }; }
-
-        if !a_cast && !b_cast {
-            let (a_miss, b_miss) = (provides_missing(a), provides_missing(b));
-            if a_miss != b_miss { return if a_miss { std::cmp::Ordering::Less } else { std::cmp::Ordering::Greater }; }
-            if a.has_surveil != b.has_surveil { return if a.has_surveil { std::cmp::Ordering::Less } else { std::cmp::Ordering::Greater }; }
-            let (a_tap, b_tap) = (enters_tapped(a), enters_tapped(b));
-            if a_tap != b_tap { return if a_tap { std::cmp::Ordering::Less } else { std::cmp::Ordering::Greater }; }
-            return std::cmp::Ordering::Equal;
-        }
-
-        if a.has_surveil != b.has_surveil { return if a.has_surveil { std::cmp::Ordering::Less } else { std::cmp::Ordering::Greater }; }
-        b.colors.len().cmp(&a.colors.len())
     }
 
     /// Select the best card from a milled set based on game state priorities
