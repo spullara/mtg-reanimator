@@ -5,7 +5,6 @@ use rayon::prelude::*;
 
 #[derive(Clone, Debug)]
 struct Permanent {
-    name: String,
     is_land: bool,
     is_creature: bool,
     is_earthbent: bool,
@@ -142,7 +141,7 @@ fn play_land_from_hand(hand: &mut Vec<Card>, bf: &mut Vec<Permanent>) -> bool {
         if let Card::Land(l) = &card {
             let tapped = if l.base.name == "Ba Sing Se" { !has_basic_land(bf) } else { l.enters_tapped };
             bf.push(Permanent {
-                name: l.base.name.clone(), is_land: true, is_creature: false,
+                is_land: true, is_creature: false,
                 is_earthbent: false, has_summoning_sickness: false, is_tapped: tapped,
                 abilities: vec![], is_basic: l.subtype == LandSubtype::Basic,
             });
@@ -171,11 +170,10 @@ fn play_spells(hand: &mut Vec<Card>, bf: &mut Vec<Permanent>, library: &mut Vec<
         if let Some((idx, mv)) = best {
             let card = hand.remove(idx);
             let abilities = card_abilities(&card);
-            let card_name = card.name().to_string();
             pay_mana(bf, mv as usize);
             if let Card::Creature(_) = &card {
                 bf.push(Permanent {
-                    name: card_name.clone(), is_land: false, is_creature: true,
+                    is_land: false, is_creature: true,
                     is_earthbent: false, has_summoning_sickness: true, is_tapped: false,
                     abilities: abilities.clone(), is_basic: false,
                 });
@@ -190,7 +188,7 @@ fn play_spells(hand: &mut Vec<Card>, bf: &mut Vec<Permanent>, library: &mut Vec<
                         }) {
                             library.remove(pos);
                             bf.push(Permanent {
-                                name: "Forest".to_string(), is_land: true, is_creature: false,
+                                is_land: true, is_creature: false,
                                 is_earthbent: false, has_summoning_sickness: false,
                                 is_tapped: true, abilities: vec![], is_basic: true,
                             });

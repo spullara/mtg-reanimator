@@ -68,66 +68,76 @@ pub fn should_mulligan(hand: &[Card], _mulligan_count: u32) -> bool {
     lands < 2 || !has_early_spell
 }
 
-/// Scry after mulligan - decide which cards to put on bottom
-/// Scry decision: bottom lands if hand has enough, bottom expensive spells if hand is missing lands
-fn scry_after_mulligan(library: &mut Vec<Card>, hand: &[Card], scry_count: usize) {
-    if scry_count == 0 || library.is_empty() {
-        return;
+/// Score how much we want to keep a card when we put cards on the bottom
+/// after a London mulligan. `copies_before` is the number of cards with the
+/// same name that already scored higher; `land_rank` is the rank of a land
+/// among the lands in the hand (0 = best land).
+fn keep_score(card: &Card, copies_before: usize, land_rank: usize) -> i32 {
+    if let Card::Land(land) = card {
+        let base = match land_rank {
+            0 | 1 => 1000, // the first two lands are always kept
+            2 => 500,      // the third land is very important
+            3 => 150,
+            _ => 10,
+        };
+        // Prefer lands that enter untapped and make more colors
+        let quality = if land.enters_tapped { 0 } else { 5 } + land.colors.len() as i32;
+        return base + quality;
     }
-
-    let hand_lands = count_lands(hand);
-    let mut to_bottom: Vec<Card> = Vec::new();
-    let mut to_top: Vec<Card> = Vec::new();
-
-    // Look at top scry_count cards
-    let scry_cards: Vec<Card> = library.drain(0..scry_count.min(library.len())).collect();
-
-    for card in scry_cards {
-        let name = card.name();
-
-        // Always bottom Bringer/Terror (want in graveyard, not hand)
-        if name == "Bringer of the Last Gift" || name == "Terror of the Peaks" {
-            to_bottom.push(card);
-        }
-        // Bottom lands if we have enough in hand
-        else if matches!(card, Card::Land(_)) && hand_lands >= 3 {
-            to_bottom.push(card);
-        }
-        // Bottom expensive spells if we're missing lands
-        else if card.mana_value() >= 4 && hand_lands < 2 {
-            to_bottom.push(card);
-        } else {
-            to_top.push(card);
-        }
-    }
-
-    // Reconstruct library: top cards, then rest, then bottom cards
-    let mut new_library = to_top;
-    new_library.extend(library.drain(0..));
-    new_library.extend(to_bottom);
-
-    *library = new_library;
+    let first = copies_before == 0;
+    let name = card.name();
+    let base = if name == "Superior Spider-Man" {
+        if first { 600 } else { 100 }
+    } else if name == "Beseech the Mirror" {
+        if first { 450 } else { 120 }
+    } else if is_mill_enabler(card) {
+        if first { 400 } else { 300 }
+    } else if name == "Bringer of the Last Gift" {
+        if first { 350 } else { 50 }
+    } else if is_playable_early_spell(card) {
+        200
+    } else {
+        80
+    };
+    base - card.mana_value() as i32
 }
 
-/// Mulligan to a smaller hand size, with scry
-fn mulligan_hand(library: &mut Vec<Card>, hand_size: usize, rng: &mut GameRng) -> Vec<Card> {
-    let hand: Vec<Card> = library.drain(0..hand_size).collect();
-    
-    let lands = count_lands(&hand);
-    if lands < 2 && hand_size > 4 {
-        // Still bad, mulligan again
-        library.extend(hand);
-        rng.shuffle(library);
-        return mulligan_hand(library, hand_size - 1, rng);
+/// London mulligan: from a 7-card hand, put `n` cards on the bottom.
+/// Returns (cards to keep, cards for the bottom of the library).
+fn choose_bottom(hand: Vec<Card>, n: usize) -> (Vec<Card>, Vec<Card>) {
+    if n == 0 {
+        return (hand, Vec::new());
     }
-    
-    // Scry for each card below 7
-    let scry_count = 7 - hand_size;
-    if scry_count > 0 {
-        scry_after_mulligan(library, &hand, scry_count);
+    // Rank lands by quality, so land_rank 0 is the best land
+    let mut land_quality: Vec<(usize, i32)> = hand.iter().enumerate()
+        .filter_map(|(i, c)| match c {
+            Card::Land(l) => Some((i, (if l.enters_tapped { 0 } else { 5 }) + l.colors.len() as i32)),
+            _ => None,
+        })
+        .collect();
+    land_quality.sort_by(|a, b| b.1.cmp(&a.1));
+    let land_rank = |i: usize| land_quality.iter().position(|(j, _)| *j == i).unwrap_or(0);
+
+    // Score spells in order so that later copies of a name count as extras
+    let mut order: Vec<usize> = (0..hand.len()).collect();
+    order.sort_by_key(|&i| std::cmp::Reverse(keep_score(&hand[i], 0, land_rank(i))));
+    let mut scores = vec![0i32; hand.len()];
+    let mut seen: std::collections::HashMap<&str, usize> = std::collections::HashMap::new();
+    for &i in &order {
+        let copies = seen.entry(hand[i].name()).or_insert(0);
+        scores[i] = keep_score(&hand[i], *copies, land_rank(i));
+        *copies += 1;
     }
-    
-    hand
+
+    let mut idx: Vec<usize> = (0..hand.len()).collect();
+    idx.sort_by_key(|&i| std::cmp::Reverse(scores[i]));
+    let bottom_set: std::collections::HashSet<usize> = idx.iter().rev().take(n).copied().collect();
+    let mut keep = Vec::new();
+    let mut bottom = Vec::new();
+    for (i, c) in hand.into_iter().enumerate() {
+        if bottom_set.contains(&i) { bottom.push(c) } else { keep.push(c) }
+    }
+    (keep, bottom)
 }
 
 /// Bo1 opening hand smoothing algorithm.
@@ -186,33 +196,32 @@ pub fn bo1_opening_hand(
     chosen
 }
 
-/// Resolve the opening hand: Arena's Bo1 hand smoothing for the first 7
-/// (`bo1_opening_hand`: of two hands, keep the one whose land count is closest
-/// to the deck's land ratio), then the normal keep / mulligan decisions.
-/// Returns the final hand after all mulligans and scries.
+/// Resolve the opening hand with Arena's Bo1 rules and the London mulligan.
+/// Every 7-card draw uses Bo1 hand smoothing (`bo1_opening_hand`: of two
+/// hands, keep the one whose land count is closest to the deck's land ratio).
+/// After the m-th mulligan, put m cards from the new 7 on the bottom. The
+/// keep / mulligan decision looks at the hand after the bottom step. A
+/// 4-card hand is always kept.
 pub fn resolve_mulligans(
     library: &mut Vec<Card>,
     rng: &mut GameRng,
     deck_land_count: usize,
     deck_size: usize,
 ) -> Vec<Card> {
-    let mut chosen_hand = bo1_opening_hand(library, rng, deck_land_count, deck_size);
-
-    // Check if we need to mulligan the chosen hand
-    let mut mulligan_count = 0;
+    let mut mulligans = 0usize;
     loop {
-        if !should_mulligan(&chosen_hand, mulligan_count) || chosen_hand.len() <= 4 {
-            break;
+        let seven = bo1_opening_hand(library, rng, deck_land_count, deck_size);
+        let (keep, bottom) = choose_bottom(seven, mulligans);
+        if mulligans >= 3 || !should_mulligan(&keep, mulligans as u32) {
+            // The library's top is index 0, so the bottom is the end
+            library.extend(bottom);
+            return keep;
         }
-
-        let next_hand_size = chosen_hand.len() - 1;
-        library.extend(chosen_hand.clone());
+        library.extend(keep);
+        library.extend(bottom);
         rng.shuffle(library);
-        chosen_hand = mulligan_hand(library, next_hand_size, rng);
-        mulligan_count += 1;
+        mulligans += 1;
     }
-
-    chosen_hand
 }
 
 #[cfg(test)]
@@ -284,6 +293,52 @@ mod tests {
         // Should have a hand of at least 4 cards (minimum after mulligans)
         assert!(hand.len() >= 4, "Hand should have at least 4 cards");
         assert!(hand.len() <= 7, "Hand should have at most 7 cards");
+    }
+
+    #[test]
+    fn test_london_bottom_keeps_lands_and_spider_man() {
+        let db = CardDatabase::from_file("cards.json").expect("Failed to load cards");
+        let c = |n: &str| db.get_card(n).expect(n);
+        // 5 lands + Spider-Man + Valgavoth; bottom 2
+        let hand = vec![c("Swamp"), c("Watery Grave"), c("Island"), c("Undercity Sewers"),
+            c("Pit of Offerings"), c("Superior Spider-Man"), c("Valgavoth, Terror Eater")];
+        let (keep, bottom) = choose_bottom(hand, 2);
+        assert_eq!(keep.len(), 5);
+        assert_eq!(bottom.len(), 2);
+        assert!(keep.iter().any(|c| c.name() == "Superior Spider-Man"));
+        assert_eq!(count_lands(&keep), 4, "a 5-land hand bottoms one land and the worst spell");
+        assert!(bottom.iter().any(|c| c.name() == "Valgavoth, Terror Eater"));
+        // The bottomed land is one that enters tapped
+        let bottom_land = bottom.iter().find(|c| matches!(c, Card::Land(_))).expect("a land");
+        assert!(matches!(bottom_land.name(), "Undercity Sewers" | "Pit of Offerings"));
+    }
+
+    #[test]
+    fn test_london_bottom_never_drops_below_two_lands() {
+        let db = CardDatabase::from_file("cards.json").expect("Failed to load cards");
+        let c = |n: &str| db.get_card(n).expect(n);
+        let hand = vec![c("Swamp"), c("Island"), c("Superior Spider-Man"), c("Beseech the Mirror"),
+            c("Does Machines"), c("Bringer of the Last Gift"), c("Bringer of the Last Gift")];
+        let (keep, _) = choose_bottom(hand, 3);
+        assert_eq!(keep.len(), 4);
+        assert_eq!(count_lands(&keep), 2);
+        assert!(keep.iter().any(|c| c.name() == "Superior Spider-Man"));
+        assert!(keep.iter().any(|c| c.name() == "Beseech the Mirror"));
+    }
+
+    #[test]
+    fn test_resolve_mulligans_keeps_card_count() {
+        let db = CardDatabase::from_file("cards.json").expect("Failed to load cards");
+        let deck = crate::simulation::deck::parse_deck_file("deck_latest.txt", &db).expect("deck");
+        let lands = count_lands(&deck);
+        for seed in 0..300u64 {
+            let mut rng = crate::rng::GameRng::new(Some(seed));
+            let mut library = deck.clone();
+            rng.shuffle(&mut library);
+            let hand = resolve_mulligans(&mut library, &mut rng, lands, deck.len());
+            assert!(hand.len() >= 4 && hand.len() <= 7);
+            assert_eq!(hand.len() + library.len(), 60, "no card is lost or duplicated");
+        }
     }
 
     #[test]

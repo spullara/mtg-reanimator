@@ -67,13 +67,7 @@ impl Library {
         Library { cards: Vec::new() }
     }
 
-    pub fn with_capacity(cap: usize) -> Self {
-        Library { cards: Vec::with_capacity(cap) }
-    }
 
-    pub fn clear(&mut self) {
-        self.cards.clear();
-    }
 
     pub fn add_card(&mut self, card: Card) {
         self.cards.push(card);
@@ -134,13 +128,7 @@ impl Hand {
         Hand { cards: Vec::new() }
     }
 
-    pub fn with_capacity(cap: usize) -> Self {
-        Hand { cards: Vec::with_capacity(cap) }
-    }
 
-    pub fn clear(&mut self) {
-        self.cards.clear();
-    }
 
     pub fn add_card(&mut self, card: Card) {
         self.cards.push(card);
@@ -174,13 +162,7 @@ impl Graveyard {
         Graveyard { cards: Vec::new() }
     }
 
-    pub fn with_capacity(cap: usize) -> Self {
-        Graveyard { cards: Vec::with_capacity(cap) }
-    }
 
-    pub fn clear(&mut self) {
-        self.cards.clear();
-    }
 
     pub fn add_card(&mut self, card: Card) {
         self.cards.push(card);
@@ -216,15 +198,6 @@ impl Battlefield {
         }
     }
 
-    pub fn with_capacity(cap: usize) -> Self {
-        Battlefield {
-            permanents: Vec::with_capacity(cap),
-        }
-    }
-
-    pub fn clear(&mut self) {
-        self.permanents.clear();
-    }
 
     pub fn add_permanent(&mut self, permanent: Permanent) {
         self.permanents.push(permanent);
@@ -258,13 +231,7 @@ impl Exile {
         Exile { cards: Vec::new() }
     }
 
-    pub fn with_capacity(cap: usize) -> Self {
-        Exile { cards: Vec::with_capacity(cap) }
-    }
 
-    pub fn clear(&mut self) {
-        self.cards.clear();
-    }
 
     pub fn add_card(&mut self, card: Card) {
         self.cards.push(card);
