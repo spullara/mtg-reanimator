@@ -1,5 +1,10 @@
 #!/usr/bin/env python3
-"""LLM-powered move advisor for the Dimir Reanimator MTGA deck."""
+"""LLM-powered move advisor for MTGA.
+
+The decklist comes from the match data in Player.log (the deck the client
+submits at match start). The strategy comes from a plain-text file the deck
+designer wrote in arena/strategies/.
+"""
 
 import argparse
 import json
@@ -33,43 +38,25 @@ def advisor_model():
 def advisor_effort():
     return os.environ.get("ARENA_ADVISOR_EFFORT", DEFAULT_EFFORT)
 
-DECKLIST = {
-    "Does Machines": 4,
-    "Kavaero Mind-Bitten": 4,
-    "Bitter Triumph": 4,
-    "Bringer of the Last Gift": 4,
-    "Overlord of the Balemurk": 4,
-    "Zombify": 2,
-    "Ardyn the Usurper": 2,
-    "Marang River Regent": 2,
-    "Terror of the Peaks": 2,
-    "Winternight Stories": 2,
-    "Beseech the Mirror": 1,
-    "Deceit": 1,
-    "Jadzi Steward of Fate": 1,
-    "Kiora the Rising Tide": 1,
-    "Steamcore Scholar": 1,
-    "Summon: Bahamut": 1,
-    "Cavern of Souls": 4,
-    "Watery Grave": 4,
-    "Gloomlake Verge": 4,
-    "Multiversal Passage": 4,
-    "Starting Town": 4,
-    "Swamp": 4,
-}
+STRATEGIES_DIR = Path(__file__).resolve().parent / "strategies"
 
-ENABLERS = {"Does Machines", "Overlord of the Balemurk", "Winternight Stories"}
-REANIMATORS = {"Zombify", "Bringer of the Last Gift", "Kavaero Mind-Bitten"}
-REMOVAL = {"Bitter Triumph", "Deceit"}
+# Role hints for the offline heuristic only. The LLM path gets its deck from
+# the match log and its strategy from the designer's strategy file.
+ENABLERS = {
+    "Does Machines",
+    "Overlord of the Balemurk",
+    "Dark Matter Manipulator",
+    "Theorix Charm",
+}
+REANIMATORS = {"Superior Spider-Man"}
+REMOVAL = {"Bitter Triumph", "Grim Bauble"}
 BIG_TARGETS = {
     "Bringer of the Last Gift",
-    "Ardyn the Usurper",
-    "Marang River Regent",
+    "Valgavoth, Terror Eater",
     "Terror of the Peaks",
-    "Jadzi Steward of Fate",
-    "Kiora the Rising Tide",
-    "Steamcore Scholar",
-    "Summon: Bahamut",
+    "Marang River Regent",
+    "Deceit",
+    "Ardyn, the Usurper",
 }
 LANDS = {
     "Cavern of Souls",
@@ -77,33 +64,88 @@ LANDS = {
     "Gloomlake Verge",
     "Multiversal Passage",
     "Starting Town",
+    "Undercity Sewers",
+    "Pit of Offerings",
     "Swamp",
+    "Island",
 }
 
-SYSTEM_PROMPT = """You are an expert Magic: The Gathering Arena advisor for this Standard Dimir Reanimator deck.
 
-Deck:
-4 Does Machines, 4 Kavaero Mind-Bitten, 4 Bitter Triumph, 4 Bringer of the Last Gift,
-4 Overlord of the Balemurk, 2 Zombify, 2 Ardyn the Usurper, 2 Marang River Regent,
-2 Terror of the Peaks, 2 Winternight Stories, 1 Beseech the Mirror, 1 Deceit,
-1 Jadzi Steward of Fate, 1 Kiora the Rising Tide, 1 Steamcore Scholar, 1 Summon: Bahamut,
-4 Cavern of Souls, 4 Watery Grave, 4 Gloomlake Verge, 4 Multiversal Passage, 4 Starting Town, 4 Swamp.
+def deck_from_state(game_state):
+    """Return the decklist read from the match log, or {}."""
+    if isinstance(game_state, dict):
+        deck = game_state.get("deck")
+        if isinstance(deck, dict):
+            return {str(name): int(count) for name, count in deck.items()}
+    return {}
 
-Strategy:
-- Mill large creatures into the graveyard with Does Machines and Overlord of the Balemurk.
-- Reanimate with Zombify, Bringer of the Last Gift, and Kavaero Mind-Bitten.
-- Bitter Triumph is removal and a discard outlet; discard reanimation targets when possible.
-- Cavern of Souls usually names Zombie for Kavaero/Overlord or Dragon for Terror/Marang.
-- Beseech the Mirror finds the missing enabler, reanimation spell, removal, or payoff. Bargain if a low-value artifact/enchantment/token is available.
-- Terror of the Peaks converts later creature ETBs into lethal damage.
 
-Decision priorities:
-1. Mulligan hands with no early enabler and no workable mana; keep hands with lands plus Does Machines or Overlord.
-2. Develop mana before expensive spells, but prioritize casting enablers on curve.
-3. Put big creatures into the graveyard and keep enablers/removal/reanimation in hand.
-4. Reanimate when the graveyard contains meaningful targets. Bringer is best when it returns a large board; Kavaero is better when selective nonland permanents are enough.
-5. Hold Bitter Triumph if a must-kill opposing threat is likely, otherwise use it to discard a payoff or clear pressure.
-6. Explain sequencing, mana, graveyard contents, opponent pressure, and the best alternative.
+def load_strategy(deck=None):
+    """Return (strategy_text, path) for this deck, or (None, None).
+
+    ARENA_STRATEGY_FILE always wins. Otherwise pick the strategy file in
+    arena/strategies/ that mentions the most card names from the deck.
+    With no deck to match, a single strategy file is used as-is.
+    """
+    explicit = os.environ.get("ARENA_STRATEGY_FILE")
+    if explicit:
+        path = Path(explicit)
+        if path.is_file():
+            return path.read_text(encoding="utf-8"), path
+        return None, None
+
+    if not STRATEGIES_DIR.is_dir():
+        return None, None
+    files = sorted(
+        p for p in STRATEGIES_DIR.iterdir()
+        if p.is_file() and p.suffix in (".md", ".txt")
+    )
+    if not files:
+        return None, None
+
+    texts = {p: p.read_text(encoding="utf-8") for p in files}
+    if deck:
+        names = [name.lower() for name in deck]
+        scored = sorted(
+            ((sum(1 for n in names if n in text.lower()), p) for p, text in texts.items()),
+            key=lambda item: (-item[0], item[1].name),
+        )
+        score, best = scored[0]
+        if score > 0:
+            return texts[best], best
+    if len(files) == 1:
+        return texts[files[0]], files[0]
+    return None, None
+
+
+def build_system_prompt(deck=None, strategy=None):
+    """Build the system prompt from the match deck and the designer's strategy."""
+    if deck:
+        deck_lines = "\n".join(
+            f"{count} {name}" for name, count in sorted(deck.items(), key=lambda i: (-i[1], i[0]))
+        )
+        deck_section = f"The player's deck, read from the match log:\n{deck_lines}"
+    else:
+        deck_section = "The player's decklist has not been read from the match log yet."
+
+    if strategy:
+        strategy_section = (
+            "The deck designer wrote this strategy in their own words. Follow it:\n\n"
+            + strategy.strip()
+        )
+    else:
+        strategy_section = "No strategy file matched this deck."
+
+    return f"""You are an expert Magic: The Gathering Arena advisor.
+
+{deck_section}
+
+{strategy_section}
+
+Rules for your advice:
+- Follow the designer's strategy when it covers the situation.
+- When the strategy does not cover the situation, or no strategy is available, do not guess silently: still pick the most defensible actionIndex, but say in your reasoning that the strategy does not cover this spot and ask the user what they want to do.
+- Explain sequencing, mana, graveyard contents, opponent pressure, and the best alternative.
 """
 
 
@@ -173,22 +215,24 @@ def normalize_available_actions(available_actions):
 
 
 def summarize_deck_composition(game_state):
-    """Estimate library/graveyard composition from visible zones and the decklist."""
+    """Estimate library/graveyard composition from visible zones and the match deck."""
     graveyard = Counter(_zone_names(game_state, "you", "graveyard"))
     battlefield = Counter(_zone_names(game_state, "you", "battlefield"))
     exile = Counter(_zone_names(game_state, "you", "exile"))
     hand = Counter(_zone_names(game_state, "you", "hand"))
-    seen = graveyard + battlefield + exile + hand
-    remaining = {}
-    for card, total in DECKLIST.items():
-        remaining[card] = max(total - seen.get(card, 0), 0)
-    return {
-        "library_estimate": remaining,
+    summary = {
         "graveyard": dict(graveyard),
         "hand": dict(hand),
         "battlefield": dict(battlefield),
         "exile": dict(exile),
     }
+    deck = deck_from_state(game_state)
+    if deck:
+        seen = graveyard + battlefield + exile + hand
+        summary["library_estimate"] = {
+            card: max(total - seen.get(card, 0), 0) for card, total in deck.items()
+        }
+    return summary
 
 
 def build_user_prompt(game_state, available_actions, game_log, deck_composition):
@@ -205,15 +249,17 @@ def build_user_prompt(game_state, available_actions, game_log, deck_composition)
     )
 
 
-def _request_kwargs(user_prompt):
+def _request_kwargs(user_prompt, system_prompt=None):
     """Build the structured-output request shared by the sync and async paths."""
+    if system_prompt is None:
+        system_prompt = build_system_prompt(None, load_strategy()[0])
     return {
         "model": advisor_model(),
         "max_tokens": MAX_TOKENS,
         "system": [
             {
                 "type": "text",
-                "text": SYSTEM_PROMPT,
+                "text": system_prompt,
                 "cache_control": {"type": "ephemeral"},
             }
         ],
@@ -256,45 +302,122 @@ def _async_client(timeout=REQUEST_TIMEOUT_SECONDS):
     return anthropic.AsyncAnthropic().with_options(timeout=timeout)
 
 
-def call_anthropic(user_prompt, timeout=REQUEST_TIMEOUT_SECONDS):
+def call_anthropic(user_prompt, timeout=REQUEST_TIMEOUT_SECONDS, system_prompt=None):
     """Call the Messages API and return a validated AdvisorResponse."""
     try:
-        response = _sync_client(timeout).beta.messages.parse(**_request_kwargs(user_prompt))
+        response = _sync_client(timeout).beta.messages.parse(
+            **_request_kwargs(user_prompt, system_prompt)
+        )
     except anthropic.AnthropicError as exc:
         raise _as_advisor_error(exc) from exc
     return _extract_parsed(response)
 
 
-async def call_anthropic_async(user_prompt, timeout=REQUEST_TIMEOUT_SECONDS):
+async def call_anthropic_async(user_prompt, timeout=REQUEST_TIMEOUT_SECONDS, system_prompt=None):
     """Async variant of call_anthropic for the live dashboard."""
     try:
-        response = await _async_client(timeout).beta.messages.parse(**_request_kwargs(user_prompt))
+        response = await _async_client(timeout).beta.messages.parse(
+            **_request_kwargs(user_prompt, system_prompt)
+        )
     except anthropic.AnthropicError as exc:
         raise _as_advisor_error(exc) from exc
     return _extract_parsed(response)
+
+
+def _is_land_card(card):
+    """Best-effort land check for a game-state card dict."""
+    if isinstance(card, dict):
+        card_types = card.get("cardTypes")
+        if isinstance(card_types, list) and card_types:
+            return "CardType_Land" in card_types
+    name = _card_name(card)
+    return any(land in name for land in LANDS)
+
+
+def _mana_value(card):
+    """Total mana value from a GRE manaCost list, or None when unknown."""
+    if not isinstance(card, dict):
+        return None
+    cost = card.get("manaCost")
+    if not isinstance(cost, list):
+        return None
+    total = 0
+    for part in cost:
+        if isinstance(part, dict):
+            try:
+                total += int(part.get("count", 0))
+            except (TypeError, ValueError):
+                pass
+    return total
+
+
+def _untapped_land_count(game_state):
+    player = game_state.get("you", {}) if isinstance(game_state, dict) else {}
+    count = 0
+    for card in player.get("battlefield", []):
+        if _is_land_card(card) and not (isinstance(card, dict) and card.get("tapped")):
+            count += 1
+    return count
+
+
+def _action_cost(action, hand_cards):
+    """Mana value an action would cost, or None when unknown.
+
+    Prefer the action's own manaCost (it carries alternate costs such as
+    impending); fall back to the matching hand card's printed cost.
+    """
+    if not isinstance(action, dict):
+        return None
+    own_cost = _mana_value(action)
+    if own_cost is not None:
+        return own_cost
+    grp_id = action.get("grpId")
+    name = action.get("name")
+    for card in hand_cards:
+        if not isinstance(card, dict):
+            continue
+        if grp_id and card.get("grpId") == grp_id:
+            return _mana_value(card)
+    for card in hand_cards:
+        if isinstance(card, dict) and name and card.get("name") == name:
+            return _mana_value(card)
+    return None
 
 
 def heuristic_recommendation(game_state, available_actions, reason_prefix="Offline heuristic"):
     """Small deterministic fallback so replay mode works without an API key."""
+    player = game_state.get("you", {}) if isinstance(game_state, dict) else {}
+    hand_cards = player.get("hand", [])
     hand = _zone_names(game_state, "you", "hand")
     graveyard = _zone_names(game_state, "you", "graveyard")
-    battlefield = _zone_names(game_state, "you", "battlefield")
     opp_battlefield = _zone_names(game_state, "opponent", "battlefield")
     graveyard_targets = sum(1 for card in graveyard if any(target in card for target in BIG_TARGETS))
     hand_targets = sum(1 for card in hand if any(target in card for target in BIG_TARGETS))
-    lands_in_play = sum(1 for card in battlefield if any(land in card for land in LANDS))
+    available_mana = _untapped_land_count(game_state)
 
     scored = []
     for fallback_index, action in enumerate(available_actions):
         idx = _action_index(action, fallback_index)
         name = _action_name(action)
         action_type = action.get("actionType", "") if isinstance(action, dict) else ""
+        is_land_play = action_type in ("ActionType_Play", "ActionType_PlayLand") or (
+            not action_type and any(card in name for card in LANDS)
+        )
+        is_cast = action_type.startswith("ActionType_Cast")
         score = 0.0
         reasons = []
 
-        if any(card in name for card in LANDS) or action_type == "ActionType_PlayLand":
-            score += 2.0 if lands_in_play < 4 else 0.7
-            reasons.append("develops mana")
+        if is_cast:
+            cost = _action_cost(action, hand_cards)
+            if cost is not None and cost > available_mana:
+                # Never recommend a spell we cannot pay for
+                scored.append((-100.0, idx, name, f"cannot be paid for ({cost} mana vs {available_mana} untapped lands)"))
+                continue
+
+        if is_land_play:
+            # Always make the land drop first
+            score += 10.0
+            reasons.append("develops mana (play a land before casting spells)")
         if any(card in name for card in ENABLERS):
             score += 5.0
             reasons.append("fills the graveyard for reanimation")
@@ -388,22 +511,25 @@ def advise_move(game_state, available_actions, game_log=None, deck_composition=N
     prepared = _prepare_llm_call(game_state, available_actions, game_log, deck_composition, use_llm)
     if isinstance(prepared, dict):
         return prepared
-    actions, prompt = prepared
+    actions, prompt, system_prompt = prepared
     try:
-        parsed = call_anthropic(prompt)
+        parsed = call_anthropic(prompt, system_prompt=system_prompt)
     except AdvisorError as exc:
         return _llm_fallback(game_state, actions, exc)
     return normalize_recommendation(parsed.model_dump(), actions, game_state)
 
 
 def _prepare_llm_call(game_state, available_actions, game_log, deck_composition, use_llm):
-    """Return a heuristic result dict, or (actions, prompt) for an LLM call."""
+    """Return a heuristic result dict, or (actions, prompt, system_prompt) for an LLM call."""
     game_log = game_log or []
     actions = normalize_available_actions(available_actions)
     if not actions or not use_llm:
         return heuristic_recommendation(game_state, actions)
     deck_composition = deck_composition or summarize_deck_composition(game_state)
-    return actions, build_user_prompt(game_state, actions, game_log, deck_composition)
+    deck = deck_from_state(game_state)
+    strategy, _ = load_strategy(deck)
+    system_prompt = build_system_prompt(deck, strategy)
+    return actions, build_user_prompt(game_state, actions, game_log, deck_composition), system_prompt
 
 
 def _llm_fallback(game_state, actions, exc):
@@ -422,9 +548,9 @@ async def get_advice_async(game_state, actions, game_log=None, deck_info=None, u
     prepared = _prepare_llm_call(game_state, actions, game_log, deck_info, use_llm)
     if isinstance(prepared, dict):
         return prepared
-    actions, prompt = prepared
+    actions, prompt, system_prompt = prepared
     try:
-        parsed = await call_anthropic_async(prompt)
+        parsed = await call_anthropic_async(prompt, system_prompt=system_prompt)
     except AdvisorError as exc:
         return _llm_fallback(game_state, actions, exc)
     return normalize_recommendation(parsed.model_dump(), actions, game_state)
@@ -475,9 +601,18 @@ def replay_log(log_path, use_llm=True, max_decisions=None):
     state = GameState(card_db)
     recent_log = []
     decisions = 0
+    deck_announced = False
 
     for event_type, data in parse_log(log_path):
         state.update(data)
+        if not deck_announced and state.deck_grp_ids:
+            deck = state.decklist()
+            print(f"Deck read from match log ({sum(deck.values())} cards):")
+            for name, count in sorted(deck.items(), key=lambda i: (-i[1], i[0])):
+                print(f"  {count} {name}")
+            _, strategy_path = load_strategy(deck)
+            print(f"Strategy file: {strategy_path.name if strategy_path else 'none matched'}")
+            deck_announced = True
         summary = _event_summary(event_type, data, state, card_db)
         if summary:
             recent_log.append(summary)

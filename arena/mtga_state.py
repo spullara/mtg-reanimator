@@ -96,6 +96,7 @@ class GameState:
         self.match_id = None
         self.player_names = {}
         self.our_seat = None
+        self.deck_grp_ids = []
         self.event_id = None
         self.token_creators = {}
         self.id_changes = {}
@@ -129,6 +130,14 @@ class GameState:
 
     def get_player_name(self, seat_id):
         return self.player_names.get(seat_id, f"Player#{seat_id}")
+
+    def decklist(self):
+        """Return the submitted deck as {card name: count}, or {} if unknown."""
+        deck = {}
+        for grp_id in self.deck_grp_ids:
+            name = self.card_db.get_name(grp_id)
+            deck[name] = deck.get(name, 0) + 1
+        return deck
 
     def _update_game_state_msg(self, gsm):
         if gsm.get("zones"):
@@ -204,6 +213,13 @@ class GameState:
                     seats = gre_msg.get("systemSeatIds", [])
                     if seats:
                         self.our_seat = seats[0]
+                    deck_cards = (
+                        gre_msg.get("connectResp", {})
+                        .get("deckMessage", {})
+                        .get("deckCards")
+                    )
+                    if deck_cards:
+                        self.deck_grp_ids = list(deck_cards)
                     self._changed = True
 
                 elif msg_type == "GREMessageType_GameStateMessage":
@@ -223,16 +239,30 @@ class GameState:
         return self._changed
 
     def _get_objects_in_zone_type(self, zone_type, seat_id=None):
-        """Get objects in zones of a given type, optionally filtered by seat."""
+        """Get objects in zones of a given type, optionally filtered by seat.
+
+        Shared zones (the battlefield has no ownerSeatId) are filtered by the
+        object's controller instead.
+        """
         zone_ids = set()
+        shared_zone_ids = set()
         for zid, z in self.zones.items():
-            if z.get("type") == zone_type:
-                if seat_id is None or z.get("ownerSeatId") == seat_id:
-                    zone_ids.add(zid)
+            if z.get("type") != zone_type:
+                continue
+            owner = z.get("ownerSeatId")
+            if seat_id is None or owner == seat_id:
+                zone_ids.add(zid)
+            elif owner is None:
+                shared_zone_ids.add(zid)
         result = []
         for obj in self.objects.values():
-            if obj.get("zoneId") in zone_ids:
+            zid = obj.get("zoneId")
+            if zid in zone_ids:
                 result.append(obj)
+            elif zid in shared_zone_ids:
+                controller = obj.get("controllerSeatId") or obj.get("ownerSeatId")
+                if controller == seat_id:
+                    result.append(obj)
         return result
 
     def _obj_to_dict(self, obj):
@@ -327,12 +357,15 @@ class GameState:
         actions_avail = []
         for a in self.pending_actions:
             grp_id = a.get("grpId", 0)
-            actions_avail.append({
+            action = {
                 "actionIndex": a.get("actionIndex", 0),
                 "actionType": a.get("actionType", ""),
                 "name": self.card_db.get_name(grp_id),
                 "grpId": grp_id,
-            })
+            }
+            if "manaCost" in a:
+                action["manaCost"] = a["manaCost"]
+            actions_avail.append(action)
 
         result = {
             "status": self.status,
@@ -340,6 +373,7 @@ class GameState:
                 "players": match_players,
                 "matchId": self.match_id,
             },
+            "deck": self.decklist(),
             "turn": turn,
             "you": self._player_dict(seat) if seat else {},
             "opponent": self._player_dict(opp_seat, is_opponent=True) if opp_seat else {},
