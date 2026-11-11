@@ -1,10 +1,21 @@
 # Dimir Reanimator — how I want this deck played
 
+**Draft.** These notes mix the simulator's rules with what my first two
+recorded games show. I will keep refining them as more of my games get saved.
+Where the two disagree I say so. If a spot comes up that these notes do not
+cover, ask me — do not improvise.
+
 This is the list with Superior Spider-Man, Bringer of the Last Gift, Beseech
 the Mirror, Dark Matter Manipulator, Does Machines, Overlord of the Balemurk,
 Terror of the Peaks, Ardyn, Valgavoth, Marang River Regent, Deceit, Theorix
-Charm, Grim Bauble, and Bitter Triumph. These notes are my plan. If a spot
-comes up that these notes do not cover, ask me — do not improvise.
+Charm, Grim Bauble, and Bitter Triumph.
+
+## Mulligans
+
+Keep any seven with two or three lands and something to do on turn two — a
+Dark Matter Manipulator, a Does Machines, or an Overlord I can cast for its
+impending cost soon. No lands, five-plus lands, or nothing to cast before
+turn four: ship it.
 
 ## The plan
 
@@ -21,8 +32,14 @@ a Spider-Man copying Bringer attacks for 4, not 6.
 
 ## When to go off
 
-Do not fire the combo just because it is legal. Count the damage first. Only
-cast Spider-Man on Bringer when the combo kills within two turns:
+In my games I go off as soon as the combo is available: Spider-Man in hand,
+Bringer in the graveyard, four mana — cast it. Waiting gives the opponent
+time to find a counterspell or a graveyard sweeper.
+
+The simulator is more patient: it only fires when the count below says the
+combo kills within two turns. I have not settled this yet — when the count
+says the combo clearly does nothing (an empty graveyard apart from Bringer),
+holding is fine; when in doubt, go. The count, for reference:
 
 - Damage now: each Terror already in play triggers for every creature that
   enters (including Spider-Man). Each Terror coming back from the graveyard
@@ -160,3 +177,24 @@ Spare mana at the end of the turn goes to, in order: Coil and Catch if Marang
 is in hand; Grim Bauble's surveil (two and a black, sacrifice it); Does
 Machines level two (one and a blue) when an artifact like a dead Bauble is in
 the graveyard — it returns up to two artifacts to hand, Baubles first.
+
+## From my own games (draft — refine as more games are saved)
+
+These come from two of my Ranked games (both wins on the play, an older
+version of the list). Two games are not enough to call them habits yet.
+
+- Keep a 7-card hand with two or three lands and a turn-two enabler (Does
+  Machines, or Overlord cast with impending). Both games started that way.
+- Do not pay 2 life for Watery Grave or Multiversal Passage unless I need the
+  mana that turn. Let them enter tapped on a turn with nothing to cast.
+- When I discard, Bringer goes first, then the other big creatures (Marang,
+  Overlord), then extra Bitter Triumphs I do not need.
+- When the combo is ready, do it. In both games the opponent conceded the turn
+  after Spider-Man copied Bringer.
+- Beseech bargains whatever spare permanent is on the battlefield to cast
+  Spider-Man free (Does Machines is fine when no Overlord is out).
+- Against a control deck that attacks my hand or graveyard, evoke Deceit with
+  two black for the hand attack: take their best card. It still puts Deceit in
+  the graveyard for the mass return.
+- If Spider-Man and Bringer are ready but I am one mana short, use the turn to
+  dig for a land or another piece instead of passing.
