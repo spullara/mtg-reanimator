@@ -185,8 +185,14 @@ class DecisionExtractor:
 
                 elif msg_type == "ClientMessageType_EffectCostResp":
                     ids = payload.get("effectCostResp", {}).get("costSelection", {}).get("ids", [])
-                    if last_bargain and last_bargain[0] == turn:
+                    if last_bargain and last_bargain[0] == turn and not last_bargain[1]:
                         last_bargain = (turn, [name_of(i) for i in ids])
+                    elif ids and d["spells"] and d["spells"][-1]["card"] == "Bitter Triumph":
+                        # Bitter Triumph's additional cost: discard a card
+                        d["discard_choices"].append({
+                            "turn": turn, "source": "Bitter Triumph",
+                            "cards": [name_of(i) for i in ids],
+                        })
 
                 elif msg_type == "ClientMessageType_SelectTargetsResp":
                     for t in payload.get("selectTargetsResp", {}).get("target", {}).get("targets", []):
@@ -233,6 +239,11 @@ class DecisionExtractor:
 
         for idx, ids in beseech_fetch_ids:
             d["beseech"][idx]["fetched"] = name_of(ids[0])
+
+        if d["combo"] is None:
+            spidey = next((sp for sp in d["spells"] if sp["card"] == COMBO_PIECE), None)
+            if spidey:
+                d["combo"] = {"turn": spidey["turn"], "copy_target": None}
 
         # Report the player's own turn numbers ("your turn 5"), not the game's
         # turn counter, which counts both players' turns.
@@ -438,8 +449,9 @@ def write_report(games, summary):
             ready = (f" The pieces were ready on turn {c['ready_turn']}"
                      + (f" — a delay of {c['delay']} turn(s)." if c.get("delay")
                         else " (no delay).")) if c.get("ready_turn") else ""
-            out(f"- Cast Superior Spider-Man on turn {c['turn']}, copying "
-                f"{c['copy_target']}.{ready}")
+            copy = (f"copying {c['copy_target']}" if c.get("copy_target")
+                    else "the game ended before the copy was chosen")
+            out(f"- Cast Superior Spider-Man on turn {c['turn']}, {copy}.{ready}")
     else:
         out("- The combo was not cast in these games.")
     out("")
