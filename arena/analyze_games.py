@@ -89,6 +89,10 @@ class DecisionExtractor:
         turn = 0
         seen_turns = set()
         last_bargain = None  # (turn, [sacrificed card names])
+        pending_searches = {}  # SearchReq msgId -> source instance id
+        beseech_fetch_ids = []  # (entry index, [instance ids]) resolved at the end
+        self._my_turn_of = {}  # game turn number -> the player's own turn number
+        self._my_turns = 0
 
         def our(seat):
             return state.our_seat is not None and seat == state.our_seat
@@ -131,9 +135,12 @@ class DecisionExtractor:
                 return
             hand = our_zone_names("ZoneType_Hand")
             graveyard = our_zone_names("ZoneType_Graveyard")
+            # Lands that entered tapped this turn cannot pay for Spider-Man
+            tapped_this_turn = sum(1 for land in d["lands"]
+                                   if land["turn"] == turn and land["tapped"])
             if (COMBO_PIECE in hand
                     and any(c in BIG_TARGETS for c in graveyard)
-                    and our_battlefield_lands() >= spider_mana_value()):
+                    and our_battlefield_lands() - tapped_this_turn >= spider_mana_value()):
                 d["ready_turn"] = turn
 
         pending_select_n = {}
@@ -148,6 +155,11 @@ class DecisionExtractor:
                             state.our_seat = seats[0]
                     elif msg_type == "GREMessageType_SelectNReq":
                         pending_select_n[msg.get("msgId")] = msg
+                    elif msg_type == "GREMessageType_SearchReq":
+                        params = msg.get("prompt", {}).get("parameters", [])
+                        source_id = next((pp.get("numberValue") for pp in params
+                                          if pp.get("parameterName") == "CardId"), None)
+                        pending_searches[msg.get("msgId")] = source_id
                     elif msg_type in ("GREMessageType_GameStateMessage",
                                       "GREMessageType_QueuedGameStateMessage"):
                         gsm = msg.get("gameStateMessage", {})
@@ -183,6 +195,19 @@ class DecisionExtractor:
                             target = state.get_player_name(tid) if tid in (1, 2) else name_of(tid)
                             d["targets_chosen"].append({"turn": turn, "target": target})
 
+                elif msg_type == "ClientMessageType_SearchResp":
+                    source_id = pending_searches.pop(payload.get("respId"), None)
+                    found = payload.get("searchResp", {}).get("itemsFound", [])
+                    bargained = bool(last_bargain and last_bargain[0] == turn)
+                    if found and (bargained or (source_id and name_of(source_id) == TUTOR)):
+                        d["beseech"].append({
+                            "turn": turn,
+                            "fetched": None,
+                            "bargained": bargained,
+                            "sacrificed": last_bargain[1] if bargained else [],
+                        })
+                        beseech_fetch_ids.append((len(d["beseech"]) - 1, found))
+
                 elif msg_type == "ClientMessageType_SelectNResp":
                     req = pending_select_n.pop(payload.get("respId"), {})
                     ids = payload.get("selectNResp", {}).get("ids", [])
@@ -196,16 +221,32 @@ class DecisionExtractor:
                         d["discard_choices"].append({
                             "turn": turn, "source": source, "cards": chosen,
                         })
-                    elif source == TUTOR or prompt_text == "Choose a nonland card.":
-                        bargained = bool(last_bargain and last_bargain[0] == turn)
-                        d["beseech"].append({
-                            "turn": turn,
-                            "fetched": chosen[0],
-                            "bargained": bargained,
-                            "sacrificed": last_bargain[1] if bargained else [],
+                    elif prompt_text == "Choose a nonland card.":
+                        # Hand attack (for example Deceit evoked with {B}{B}):
+                        # the player picks a card from the opponent's hand
+                        d["interaction"].append({
+                            "turn": turn, "card": source, "effect": "hand attack",
+                            "took": chosen[0],
                         })
                     elif prompt_text == "Select object to copy.":
                         d["combo"] = {"turn": turn, "copy_target": chosen[0]}
+
+        for idx, ids in beseech_fetch_ids:
+            d["beseech"][idx]["fetched"] = name_of(ids[0])
+
+        # Report the player's own turn numbers ("your turn 5"), not the game's
+        # turn counter, which counts both players' turns.
+        def mine(t):
+            return self._my_turn_of.get(t, t) if t else t
+        for key in ("lands", "spells", "discard_choices", "discarded", "milled",
+                    "beseech", "interaction", "targets_chosen"):
+            for entry in d[key]:
+                entry["turn"] = mine(entry.get("turn"))
+        d["ready_turn"] = mine(d["ready_turn"])
+        if d["combo"]:
+            d["combo"]["turn"] = mine(d["combo"]["turn"])
+        d["game_turns"] = d.get("turns")
+        d["turns"] = self._my_turns or d.get("turns")
 
         if d["combo"] and d["ready_turn"] is not None:
             d["combo"]["ready_turn"] = d["ready_turn"]
@@ -240,6 +281,9 @@ class DecisionExtractor:
         if ti.get("turnNumber") and ti["turnNumber"] not in seen_turns:
             turn = ti["turnNumber"]
             seen_turns.add(turn)
+            if ti.get("activePlayer") == state.our_seat:
+                self._my_turns += 1
+            self._my_turn_of[turn] = self._my_turns
             if turn == 1 and ti.get("activePlayer"):
                 d["on_play"] = ti["activePlayer"] == state.our_seat
         elif ti.get("turnNumber"):
@@ -323,7 +367,8 @@ def summarize(games):
             if b["bargained"]:
                 summary["beseech_bargains"] += 1
         for i in g["interaction"]:
-            summary["interaction_casts"][i["card"]] += 1
+            label = i["card"] + (f" ({i['effect']})" if i.get("effect") else "")
+            summary["interaction_casts"][label] += 1
     summary["lands_tapped_by_turn"] = {
         str(t): {"tapped": v[0], "untapped": v[1]} for t, v in sorted(tapped.items())
     }
@@ -380,7 +425,7 @@ def write_report(games, summary):
     out("## Results")
     out(f"- The player won {summary['wins']} of {summary['games']} game(s).")
     if summary["average_turns"]:
-        out(f"- Average game length: {summary['average_turns']} turns.")
+        out(f"- Average game length: {summary['average_turns']} of the player's turns.")
     out("")
     out("## Mulligans")
     keeps = summary["games"] - sum(1 for g in games if g["mulligans"])
@@ -428,7 +473,7 @@ def write_report(games, summary):
         for card, count in sorted(summary["interaction_casts"].items(), key=lambda i: -i[1]):
             out(f"- Cast {card} {count} time(s).")
     else:
-        out("- No interaction spells were cast.")
+        out("- No interaction was used.")
     out("")
     out("## Decisions that differ from the simulator's engine rules")
     if summary["rule_differences"]:
@@ -486,7 +531,7 @@ def main(argv=None):
     parser = argparse.ArgumentParser(
         description="Analyze saved MTGA matches and report the player's strategy"
     )
-    parser.add_argument("--captures", metavar="DIR",
+    parser.add_argument("--captures", "--dir", dest="captures", metavar="DIR",
                         help="folder with match_*.json captures (default: arena/captures/)")
     parser.add_argument("--out", metavar="DIR",
                         help="output folder for decisions/summary/report (default: same as captures)")
