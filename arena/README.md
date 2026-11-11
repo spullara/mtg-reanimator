@@ -13,9 +13,25 @@ and no hosts-file changes — Arena writes everything we need to its own log.
 
 ## Quick Start
 
+Run every command from the repository root (the folder that contains
+`arena/`), so that `python -m arena.collect` can find the package.
+
+macOS:
+
 ```bash
+pip3 install -r arena/requirements.txt
 python3 arena/live_server.py
 ```
+
+Windows (PowerShell):
+
+```powershell
+py -m pip install -r arena\requirements.txt
+$env:ANTHROPIC_API_KEY = "sk-ant-..."   # optional: LLM advice
+py arena\live_server.py
+```
+
+On Windows, use `py` (or `python`) where this README says `python3`.
 
 Then open <http://localhost:8765> and play. The server:
 
@@ -24,7 +40,7 @@ Then open <http://localhost:8765> and play. The server:
 3. Pushes game state to the dashboard over WebSocket (port 8766).
 4. Asks the advisor for a recommendation at each decision point.
    Set `ANTHROPIC_API_KEY` for LLM advice; without it, a deterministic
-   heuristic answers instead.
+   heuristic answers instead. See [Advisor](#advisor).
 
 Options:
 
@@ -58,6 +74,40 @@ folder. The tailer follows the rotation automatically.
 | macOS | Steam | `~/Library/Application Support/Steam/steamapps/common/MTGA/MTGA_Data` |
 | macOS | Wizards | `/Applications/MTGA.app/Contents/Resources/Data` |
 
+## Advisor
+
+`advisor.py` recommends one of the legal actions that Arena offers at each
+decision point. It only advises; the player makes every click.
+
+- **Deck:** read from the match in `Player.log` (the deck the client sends at
+  match start), with card names from Arena's card database.
+- **Strategy:** a plain-text file in `arena/strategies/`, written in the deck
+  designer's own words. The advisor picks the file whose cards match the deck
+  best. When the file does not cover a situation, the advisor says so and asks
+  instead of guessing. `dimir-reanimator.md` is the first one (a draft).
+- **Model:** Claude through the Anthropic Python SDK, with structured outputs
+  (a validated JSON answer), prompt caching on the system prompt, and
+  server-side refusal fallbacks. On any API error or refusal it falls back to
+  the offline heuristic and says why.
+
+| Environment variable | Default | Meaning |
+|---|---|---|
+| `ANTHROPIC_API_KEY` | (none) | API key; without it the offline heuristic answers |
+| `ARENA_ADVISOR_MODEL` | `claude-opus-5-5` | Model ID |
+| `ARENA_ADVISOR_EFFORT` | `low` | `low`, `medium`, `high`, `xhigh` or `max` (lower is faster) |
+| `ARENA_STRATEGY_FILE` | (auto) | Use this strategy file instead of the best match |
+| `ARENA_CAPTURES_DIR` | `arena/captures/` | Where the collector saves matches |
+
+## Terms of Service
+
+These tools read only `Player.log`, the same file that tracker apps such as
+Untapped.gg and 17Lands read with Detailed Logs on. They do not modify the
+Arena client, do not intercept network traffic, and see no hidden
+information. The advisor never acts on its own. Wizards' Terms of Use
+(section 2.2) prohibit unauthorized bots and software that gives an advantage
+over other players; do not add automated play without written authorization
+from Wizards.
+
 ## Match archive
 
 Arena overwrites `Player.log` at each start, so at most two sessions
@@ -80,7 +130,7 @@ session data; never commit them). Override with `--dir` or
 ## Strategy analysis
 
 ```bash
-python3 arena/analyze_games.py [--captures DIR] [--out DIR] [--llm]
+python3 arena/analyze_games.py [--dir DIR] [--out DIR] [--llm]
 ```
 
 Extracts the player's decisions from the saved captures — mulligans, land
