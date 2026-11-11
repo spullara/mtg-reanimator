@@ -51,9 +51,8 @@ holding is fine; when in doubt, go. The count, for reference:
   counters don't count until the counters are gone. Dark Matter Manipulator
   gets +2 power for each 7 cards left in the graveyard.
 
-If that total doesn't reach the opponent's life, wait. Keep milling, keep
-drawing, make the eventual combo bigger. The count already includes a kill
-this very turn, so there is never a reason to wait when it's lethal now.
+The count already includes a kill this very turn, so there is never a reason
+to hold back when it's lethal now.
 
 Two more ways to use Spider-Man:
 
@@ -70,12 +69,12 @@ Two more ways to use Spider-Man:
 Whenever anything makes me discard (Does Machines, Coil and Catch, Bitter
 Triumph), discard in this order:
 
-1. A reanimation target. The graveyard is where these want to be. Best first:
-   Bringer of the Last Gift, Valgavoth, Terror of the Peaks, Marang River
-   Regent, Deceit, Ardyn.
-2. A blank: an extra Bitter Triumph, or an extra land (keep two in hand for
-   land drops).
-3. Anything that is not Superior Spider-Man.
+1. Bringer of the Last Gift. Always first — it is the combo.
+2. The other big creatures: Valgavoth, Terror of the Peaks, Marang River
+   Regent, Deceit, Ardyn. The graveyard is where they want to be.
+3. An extra Bitter Triumph, or an extra land (keep two in hand for land
+   drops).
+4. Anything that is not Superior Spider-Man.
 
 Never discard Spider-Man while there is any other card in hand. It must stay
 in hand — it is the one card that has to be cast.
@@ -97,8 +96,9 @@ graveyard for the Ardyn path.
 Only cast it when the fetch does something:
 
 - Combo target already in the graveyard, no Spider-Man in hand: get
-  Spider-Man. Bargain and cast it free only when the combo would kill within
-  two turns (or on the Ardyn path). Otherwise just put it in hand and wait.
+  Spider-Man, and bargain whatever spare permanent is around to cast it free.
+  (The simulator only free-casts when the combo kills within two turns; in my
+  games I just go — see the combo timing note above.)
 - Nothing in the graveyard yet but bargain fodder available: get Marang River
   Regent and cast its omen side, Coil and Catch, for free — draw 3, discard 1
   digs for the combo and bins a target in one card.
@@ -121,7 +121,8 @@ straight to the graveyard, which is where I want a 5/5 for the mass return.
 Pay with two blue when a bounce target is on board: the blue mode returns one
 of my own permanents to hand, and the best bounces are a Does Machines (recast
 it for another mill-draw-discard) or an Overlord still on its counters.
-Otherwise pay with whatever is open.
+Against a control deck, two black is often better: the hand attack takes
+their counterspell or sweeper. Otherwise pay with whatever is open.
 
 Marang River Regent is mostly a graveyard card too. With spare mana and
 nothing better to do, cast its omen side Coil and Catch (draw 3, discard 1) —
@@ -145,6 +146,9 @@ first three turns should guarantee four untapped lands on turn four.
   in tapped later anyway.
 - Prefer a land that adds a color I'm missing, and prefer the surveil land
   (Undercity Sewers) over a plain one when the choice is otherwise even.
+- Watery Grave and Multiversal Passage: do not pay the 2 life unless I need
+  the mana that same turn. Let them enter tapped on a turn with nothing to
+  cast.
 - Without a combo piece in hand, don't overthink it: play whatever casts the
   most right now and dig.
 - One special case: Spider-Man in hand, a combo target in the graveyard, and
