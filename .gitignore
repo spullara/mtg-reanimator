@@ -2,3 +2,9 @@ target
 .idea
 out
 *.iml
+
+# Arena tools: captures hold account and session data; never commit them
+arena/captures/*
+!arena/captures/.gitkeep
+__pycache__/
+*.pyc
