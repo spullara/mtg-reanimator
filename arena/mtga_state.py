@@ -5,13 +5,9 @@ tracking from GRE messages). Extracted from parse_game.py for reuse by
 live_server.py.
 """
 
-import glob
-import os
 import sqlite3
 
-CARD_DB_GLOB = os.path.expanduser(
-    "~/Library/Application Support/Steam/steamapps/common/MTGA/MTGA_Data/Downloads/Raw/Raw_CardDatabase_*.mtga"
-)
+from paths import find_card_db
 
 ZONE_NAMES = {
     "ZoneType_Hand": "Hand",
@@ -52,12 +48,10 @@ STEP_NAMES = {
 class CardDatabase:
     """Look up card names from the MTGA CardDatabase SQLite file."""
 
-    def __init__(self):
+    def __init__(self, db_path=None):
         self._cache = {}
-        self._db_path = None
-        paths = glob.glob(CARD_DB_GLOB)
-        if paths:
-            self._db_path = paths[0]
+        found = find_card_db(db_path)
+        self._db_path = str(found) if found else None
 
     def get_name(self, grp_id):
         if grp_id in self._cache:

@@ -2,7 +2,6 @@
 """Parse MTGA Player.log to produce a human-readable play-by-play of matches."""
 
 import argparse
-import glob
 import json
 import os
 import re
@@ -10,12 +9,7 @@ import sqlite3
 import sys
 from pathlib import Path
 
-DEFAULT_LOG_PATH = os.path.expanduser(
-    "~/Library/Logs/Wizards Of The Coast/MTGA/Player.log"
-)
-CARD_DB_GLOB = os.path.expanduser(
-    "~/Library/Application Support/Steam/steamapps/common/MTGA/MTGA_Data/Downloads/Raw/Raw_CardDatabase_*.mtga"
-)
+from paths import find_card_db, find_player_log
 
 PHASE_NAMES = {
     "Phase_Beginning": "Beginning",
@@ -122,12 +116,10 @@ def response_word(response):
 class CardDatabase:
     """Look up card names from the MTGA CardDatabase SQLite file."""
 
-    def __init__(self):
+    def __init__(self, db_path=None):
         self._cache = {}
-        self._db_path = None
-        paths = glob.glob(CARD_DB_GLOB)
-        if paths:
-            self._db_path = paths[0]
+        found = find_card_db(db_path)
+        self._db_path = str(found) if found else None
 
     def get_name(self, grp_id):
         if grp_id in self._cache:
@@ -1065,16 +1057,16 @@ def main():
     parser.add_argument(
         "log_file",
         nargs="?",
-        default=DEFAULT_LOG_PATH,
-        help=f"Path to Player.log (default: {DEFAULT_LOG_PATH})",
+        help="Path to Player.log (default: auto-detect)",
     )
     args = parser.parse_args()
 
-    if not os.path.exists(args.log_file):
-        print(f"Error: Log file not found: {args.log_file}", file=sys.stderr)
+    log_file = find_player_log(args.log_file)
+    if not log_file or not os.path.exists(log_file):
+        print(f"Error: Log file not found: {log_file or args.log_file}", file=sys.stderr)
         sys.exit(1)
 
-    process_matches(args.log_file)
+    process_matches(log_file)
 
 
 if __name__ == "__main__":

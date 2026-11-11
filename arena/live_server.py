@@ -1,18 +1,17 @@
 #!/usr/bin/env python3
 """Real-time MTGA game state server.
 
-Receives raw packets from mitmproxy addon via HTTP POST, parses the FrontDoor
-binary protocol, builds live game state, and pushes updates via WebSocket.
+Tails Player.log (requires Detailed Logs in Arena: Options → Account →
+Detailed Logs), builds live game state, and pushes updates via WebSocket.
 
-Usage: python3 arena/live_server.py
+Usage: python3 arena/live_server.py [--log PATH] [--card-db PATH] [--from-start]
 """
 
+import argparse
 import asyncio
 import copy
-import gzip
 import json
 import mimetypes
-import struct
 import sys
 import traceback
 from datetime import datetime, timezone
@@ -20,7 +19,6 @@ from http import HTTPStatus
 from pathlib import Path
 
 try:
-    import websockets
     from websockets.asyncio.server import serve as ws_serve
 except ImportError:
     print("ERROR: websockets package required. Install with: pip3 install websockets")
@@ -28,12 +26,15 @@ except ImportError:
 
 sys.path.insert(0, str(Path(__file__).parent))
 from advisor import get_advice_async, summarize_deck_composition
-from mtga_state import GameState, CardDatabase
+from log_tailer import PlayerLogTailer
+from mtga_state import CardDatabase, GameState
+from paths import find_player_log
 
 HOST = "localhost"
 HTTP_PORT = 8765
 WS_PORT = 8766
 WEB_DIR = Path(__file__).parent / "web"
+POLL_INTERVAL = 0.25
 
 # Global state
 game_state = GameState()
@@ -41,54 +42,6 @@ ws_clients: set = set()
 _advisor_decision_id = 0
 _advisor_task = None
 _last_advisor_message = None
-# Buffers for TCP stream reassembly per direction
-_buffers: dict[str, bytearray] = {
-    "client_to_server": bytearray(),
-    "server_to_client": bytearray(),
-}
-
-
-def read_varint(data, pos):
-    result, shift = 0, 0
-    while pos < len(data):
-        b = data[pos]
-        result |= (b & 0x7f) << shift
-        pos += 1
-        if not (b & 0x80):
-            break
-        shift += 7
-    return result, pos
-
-
-def parse_payload(payload):
-    """Parse a FrontDoor data frame payload into a JSON dict (or None)."""
-    try:
-        start = 0
-        # Skip optional UUID header: 0a 24 <36 bytes>
-        if len(payload) > 2 and payload[0:1] == b'\x0a' and payload[1:2] == b'\x24':
-            start = 38
-        inner = payload[start:]
-        if not inner:
-            return None
-
-        # Read protobuf field 3 tag + length
-        tag, p = read_varint(inner, 0)
-        length, p = read_varint(inner, p)
-        field_data = inner[p:p + length]
-
-        # Look for gzip within the field data
-        gzip_idx = field_data.find(b'\x1f\x8b\x08')
-        if gzip_idx >= 0:
-            decompressed = gzip.decompress(field_data[gzip_idx:])
-            return json.loads(decompressed)
-
-        # Try direct JSON
-        json_start = inner.find(b'{')
-        if json_start >= 0:
-            return json.loads(inner[json_start:])
-    except Exception:
-        pass
-    return None
 
 
 def has_actions_available_req(parsed):
@@ -100,51 +53,20 @@ def has_actions_available_req(parsed):
     return False
 
 
-def process_frames(direction):
-    """Extract complete frames from the buffer, parse them, update state.
-
-    Frame format: 04 XX <4-byte LE length> <payload>
-    Returns (changed, advisor_requested).
-    """
-    buf = _buffers[direction]
+def apply_events(events):
+    """Feed tailer events to the game state. Returns (changed, advisor_requested)."""
     changed = False
     advisor_requested = False
-
-    while len(buf) >= 6:
-        if buf[0] != 0x04:
-            # Not a valid frame start — skip one byte
-            del buf[0]
-            continue
-
-        frame_type = buf[1]
-        payload_len = struct.unpack_from('<I', buf, 2)[0]
-
-        total_frame = 6 + payload_len
-        if len(buf) < total_frame:
-            break  # Wait for more data
-
-        payload = bytes(buf[6:total_frame])
-        del buf[:total_frame]
-
-        # Only parse data frames (0x21)
-        if frame_type != 0x21:
-            continue
-
-        parsed = parse_payload(payload)
-        if parsed is None:
-            continue
-
-        # Feed to game state
+    for _event_type, data in events:
         try:
-            if game_state.update(parsed):
+            if game_state.update(data):
                 changed = True
-                advisor_requested = advisor_requested or has_actions_available_req(parsed)
+                advisor_requested = advisor_requested or has_actions_available_req(data)
                 ts = datetime.now(timezone.utc).strftime("%H:%M:%S")
-                print(f"[{ts}] State updated from {direction}", flush=True)
+                print(f"[{ts}] State updated from Player.log", flush=True)
         except Exception as e:
             print(f"[ERROR] State update failed: {e}", flush=True)
             traceback.print_exc()
-
     return changed, advisor_requested
 
 
@@ -265,6 +187,20 @@ async def broadcast_state():
     await broadcast_json(game_state.to_dict())
 
 
+async def tail_log(tailer):
+    """Poll Player.log for new events and publish state changes."""
+    while True:
+        events = await asyncio.to_thread(tailer.poll)
+        if events:
+            changed, advisor_requested = apply_events(events)
+            if changed:
+                await broadcast_state()
+            if advisor_requested:
+                request_advisor_recommendation()
+        else:
+            await asyncio.sleep(POLL_INTERVAL)
+
+
 async def handle_ws(websocket):
     """Handle a WebSocket connection."""
     ws_clients.add(websocket)
@@ -302,22 +238,13 @@ class HTTPHandler:
                 return
             method, path = parts[0], parts[1]
 
-            # Read headers
-            headers = {}
-            content_length = 0
+            # Read and discard headers
             while True:
                 hline = await asyncio.wait_for(self.reader.readline(), timeout=5)
                 if hline in (b'\r\n', b'\n', b''):
                     break
-                htext = hline.decode('utf-8', errors='replace').strip()
-                if ':' in htext:
-                    k, v = htext.split(':', 1)
-                    headers[k.strip().lower()] = v.strip()
-            content_length = int(headers.get('content-length', 0))
 
-            if method == 'POST' and path == '/packet':
-                await self._handle_packet(content_length)
-            elif method == 'GET' and path == '/state':
+            if method == 'GET' and path == '/state':
                 await self._send_json(game_state.to_dict())
             elif method == 'GET':
                 await self._serve_static(path)
@@ -334,36 +261,6 @@ class HTTPHandler:
                 await self.writer.wait_closed()
             except Exception:
                 pass
-
-    async def _handle_packet(self, content_length):
-        if content_length == 0:
-            await self._send_response(400, b'No body')
-            return
-
-        body = await asyncio.wait_for(self.reader.readexactly(content_length), timeout=10)
-        try:
-            packet = json.loads(body)
-        except json.JSONDecodeError:
-            await self._send_response(400, b'Invalid JSON')
-            return
-
-        direction = packet.get("direction", "server_to_client")
-        hex_data = packet.get("data", "")
-        try:
-            raw_bytes = bytes.fromhex(hex_data)
-        except ValueError:
-            await self._send_response(400, b'Invalid hex data')
-            return
-
-        _buffers[direction].extend(raw_bytes)
-        changed, advisor_requested = process_frames(direction)
-
-        await self._send_response(200, b'OK')
-
-        if changed:
-            await broadcast_state()
-        if advisor_requested:
-            request_advisor_recommendation()
 
     async def _serve_static(self, path):
         if path == '/' or path == '':
@@ -422,29 +319,47 @@ async def handle_http_connection(reader, writer):
     await handler.handle()
 
 
-async def main():
+def parse_args(argv=None):
+    parser = argparse.ArgumentParser(description="Real-time MTGA game state server")
+    parser.add_argument("--log", metavar="PATH", help="Path to Player.log (default: auto-detect)")
+    parser.add_argument("--card-db", metavar="PATH", help="Path to Raw_CardDatabase_*.mtga (default: auto-detect)")
+    parser.add_argument("--from-start", action="store_true",
+                        help="replay the existing log content before following (default: follow new content only)")
+    return parser.parse_args(argv)
+
+
+async def main(args):
+    global game_state
+
+    log_path = find_player_log(args.log)
+    if not log_path:
+        print("ERROR: Player.log not found. Pass --log PATH, and enable", file=sys.stderr)
+        print("Detailed Logs in Arena (Options → Account → Detailed Logs).", file=sys.stderr)
+        sys.exit(1)
+
+    game_state = GameState(CardDatabase(args.card_db))
+    tailer = PlayerLogTailer(log_path, from_start=args.from_start)
+
     # Start HTTP server
     http_server = await asyncio.start_server(handle_http_connection, HOST, HTTP_PORT)
     print(f"HTTP server listening on http://{HOST}:{HTTP_PORT}", flush=True)
-    print(f"  POST /packet  — receive raw packets from mitmproxy", flush=True)
     print(f"  GET /         — serve web UI from {WEB_DIR}", flush=True)
     print(f"  GET /state    — current game state JSON", flush=True)
 
     # Start WebSocket server
-    ws_server = await ws_serve(handle_ws, HOST, WS_PORT)
+    await ws_serve(handle_ws, HOST, WS_PORT)
     print(f"WebSocket server listening on ws://{HOST}:{WS_PORT}", flush=True)
 
-    print("\nWaiting for packets...", flush=True)
+    print(f"\nTailing {log_path}", flush=True)
 
-    # Run both servers
     await asyncio.gather(
         http_server.serve_forever(),
-        asyncio.Future(),  # run forever
+        tail_log(tailer),
     )
 
 
 if __name__ == "__main__":
     try:
-        asyncio.run(main())
+        asyncio.run(main(parse_args()))
     except KeyboardInterrupt:
         print("\nShutting down.", flush=True)

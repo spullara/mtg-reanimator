@@ -1,133 +1,94 @@
-# MTGA FrontDoor Traffic Interceptor
+# MTGA Live Game Tracker
 
-Intercepts MTGA's FrontDoor TCP/TLS connection using mitmproxy in reverse proxy mode to capture and log all API traffic.
+Tails MTGA's `Player.log`, builds live game state, and shows it on a web
+dashboard with an LLM move advisor. No proxy, no root certificate, no sudo,
+and no hosts-file changes — Arena writes everything we need to its own log.
 
 ## Prerequisites
 
-- macOS with Homebrew
-- mitmproxy 12.x (`brew install mitmproxy`)
 - Python 3.10+
+- `pip3 install -r arena/requirements.txt`
+- MTGA with **Detailed Logs** enabled: in Arena, go to
+  **Options → Account → Detailed Logs (Plugin Support)** and restart Arena.
 
 ## Quick Start
 
-### 1. Trust the mitmproxy CA certificate (one-time)
+```bash
+python3 arena/live_server.py
+```
 
-Run mitmdump once to generate the CA cert, then trust it:
+Then open <http://localhost:8765> and play. The server:
+
+1. Finds `Player.log` and the card database automatically (see below).
+2. Tails the log in real time and parses the GRE messages.
+3. Pushes game state to the dashboard over WebSocket (port 8766).
+4. Asks the advisor for a recommendation at each decision point.
+   Set `ANTHROPIC_API_KEY` for LLM advice; without it, a deterministic
+   heuristic answers instead.
+
+Options:
+
+| Flag | Meaning |
+|------|---------|
+| `--log PATH` | Explicit path to `Player.log` |
+| `--card-db PATH` | Explicit path to `Raw_CardDatabase_*.mtga` |
+| `--from-start` | Replay the existing log content before following |
+
+## File locations
+
+The tools look for the files in these places, in order. Overrides always win.
+
+**Player.log**
+
+| OS | Path |
+|----|------|
+| Windows | `%USERPROFILE%\AppData\LocalLow\Wizards Of The Coast\MTGA\Player.log` |
+| macOS | `~/Library/Logs/Wizards Of The Coast/MTGA/Player.log` |
+
+At each Arena restart, the old log rotates to `Player-prev.log` in the same
+folder. The tailer follows the rotation automatically.
+
+**Card database** (`MTGA_Data/Downloads/Raw/Raw_CardDatabase_*.mtga`)
+
+| OS | Install | MTGA_Data location |
+|----|---------|--------------------|
+| Windows | Wizards | `C:\Program Files\Wizards of the Coast\MTGA\MTGA_Data` |
+| Windows | Steam | `C:\Program Files (x86)\Steam\steamapps\common\MTGA\MTGA_Data` |
+| Windows | Epic | `C:\Program Files\Epic Games\MagicTheGathering\MTGA_Data` |
+| macOS | Steam | `~/Library/Application Support/Steam/steamapps/common/MTGA/MTGA_Data` |
+| macOS | Wizards | `/Applications/MTGA.app/Contents/Resources/Data` |
+
+## Other tools
 
 ```bash
-# Generate the CA cert (starts and immediately stop mitmdump)
-mitmdump --mode regular -p 9999 &
-sleep 2 && kill %1
+# Play-by-play narrative of the matches in a Player.log
+python3 arena/parse_game.py [PLAYER_LOG]
 
-# Trust the CA cert in macOS system keychain
-sudo security add-trusted-cert -d -r trustRoot \
-  -k /Library/Keychains/System.keychain \
-  ~/.mitmproxy/mitmproxy-ca-cert.pem
+# Advisor replay: advise at each decision point of a saved log (no API calls)
+python3 arena/advisor.py --replay PLAYER_LOG --offline
 ```
 
-### 2. Start the interceptor (resolves real server IP)
+## Tests
 
 ```bash
-bash arena/start_intercept.sh
+python3 -m unittest discover -s arena/tests -v
 ```
 
-This will:
-- Parse the FrontDoor hostname from MTGA's Player.log
-- Resolve the real server IP via DNS (before any /etc/hosts redirect)
-- Start mitmdump in reverse TCP mode on port 30010, forwarding to the real IP
-- Load the addon script that logs all traffic
-
-> **Important:** Start the interceptor *before* adding the hosts redirect. The script resolves the real server IP using DNS — if the hosts redirect is already active, `dig` will still work (it bypasses /etc/hosts), but the Python fallback would resolve to 127.0.0.1 causing a loop-back.
-
-### 3. Redirect MTGA to localhost
-
-In a separate terminal:
-
-```bash
-sudo bash arena/setup_hosts.sh --add
-```
-
-This gets the FrontDoor hostname, adds a `/etc/hosts` entry pointing it to `127.0.0.1`, and flushes the DNS cache.
-
-### 4. Launch MTGA and play
-
-MTGA will connect to localhost:30010, which mitmproxy forwards to the real server. All traffic is logged to:
-- **stdout** — live view of API calls
-- **arena/captures/mtga_capture_YYYYMMDD_HHMMSS.log** — timestamped text log
-- **arena/captures/mtga_raw_YYYYMMDD_HHMMSS.bin** — raw binary capture
-
-### 5. Stop and clean up
-
-1. Press `Ctrl+C` in the mitmdump terminal
-2. Restore `/etc/hosts`:
-   ```bash
-   sudo bash arena/setup_hosts.sh --restore
-   ```
-
-## How It Works
-
-```
-MTGA Client
-    │
-    │ TLS connect to frontdoor-*.w2.mtgarena.com:30010
-    │ (redirected to 127.0.0.1 via /etc/hosts)
-    ▼
-mitmproxy (localhost:30010)
-    │ reverse:tcp mode
-    │ terminates TLS with mitmproxy CA cert
-    │ re-encrypts to real server
-    ▼
-Real FrontDoor Server (:30010)
-```
-
-## Log Format
-
-The addon logs messages in this format:
-```
-[2026-04-07 21:30:15.123] ==> MethodName (1234 bytes)
-{
-  "pretty": "printed json"
-}
-
-[2026-04-07 21:30:15.456] <== MethodName (5678 bytes)
-{
-  "response": "data"
-}
-```
-
-- `==>` = client → server (request)
-- `<==` = server → client (response)
-
-## Troubleshooting
-
-**MTGA won't connect:**
-- Verify the hosts redirect: `ping frontdoor-mtga-production-XXX.w2.mtgarena.com` should resolve to `127.0.0.1`
-- Make sure mitmdump is running on port 30010
-- Check that the CA cert is trusted: Keychain Access → System → look for "mitmproxy"
-
-**TLS errors:**
-- Re-run the CA cert trust command
-- Make sure you're using the cert from `~/.mitmproxy/mitmproxy-ca-cert.pem`
-
-**No traffic captured:**
-- MTGA may use a different FrontDoor server. Re-run `start_intercept.sh` to get the latest hostname
-- Check if MTGA is actually running and connected
-
-## Removing mitmproxy CA Trust
-
-To untrust the mitmproxy CA certificate:
-
-```bash
-sudo security remove-trusted-cert -d ~/.mitmproxy/mitmproxy-ca-cert.pem
-```
-
-Or manually remove it from Keychain Access → System → find "mitmproxy" → Delete.
+`test_tailer_replay.py` replays a saved log through the tailer in small
+chunks (plus truncation and rotation cases) and checks that the events,
+the final dashboard state, and the advisor trigger count match the offline
+parser. Point `MTGA_SAMPLE_LOG` at a real `Player.log` to run the replay
+against it; otherwise a bundled synthetic log is used. The test writes a
+JSON report with the replay results and prints its path.
 
 ## Files
 
 | File | Description |
 |------|-------------|
-| `mtga_intercept.py` | mitmproxy addon script — TCP message logging and JSON parsing |
-| `start_intercept.sh` | Queries doorbell, starts mitmdump with correct target |
-| `setup_hosts.sh` | Manages /etc/hosts redirect (--add / --restore) |
-| `captures/` | Directory for captured traffic logs |
+| `live_server.py` | Log tailer + WebSocket/HTTP server for the dashboard |
+| `log_tailer.py` | Incremental Player.log parser and rotation-aware tailer |
+| `paths.py` | Cross-platform discovery of Player.log and the card database |
+| `mtga_state.py` | Shared live game state built from GRE messages |
+| `parse_game.py` | Offline play-by-play parser for saved logs |
+| `advisor.py` | LLM move advisor (Anthropic structured outputs) |
+| `web/` | Dashboard UI |
