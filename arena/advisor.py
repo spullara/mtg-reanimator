@@ -2,15 +2,14 @@
 """LLM-powered move advisor for the Dimir Reanimator MTGA deck."""
 
 import argparse
-import asyncio
 import json
 import os
-import re
 import sys
-import urllib.error
-import urllib.request
 from collections import Counter
 from pathlib import Path
+
+import anthropic
+from pydantic import BaseModel
 
 try:
     from mtga_state import CardDatabase, GameState
@@ -20,9 +19,19 @@ except ImportError:  # pragma: no cover - useful when imported as tools.advisor
     from arena.parse_game import parse_log
 
 
-ANTHROPIC_MODEL = "claude-sonnet-4-20250514"
-ANTHROPIC_URL = "https://api.anthropic.com/v1/messages"
-ANTHROPIC_VERSION = "2023-06-01"
+DEFAULT_MODEL = "claude-opus-5-5"
+DEFAULT_EFFORT = "low"
+MAX_TOKENS = 16000
+REQUEST_TIMEOUT_SECONDS = 30.0
+FALLBACK_BETA = "server-side-fallback-2026-07-01"
+
+
+def advisor_model():
+    return os.environ.get("ARENA_ADVISOR_MODEL", DEFAULT_MODEL)
+
+
+def advisor_effort():
+    return os.environ.get("ARENA_ADVISOR_EFFORT", DEFAULT_EFFORT)
 
 DECKLIST = {
     "Does Machines": 4,
@@ -95,14 +104,18 @@ Decision priorities:
 4. Reanimate when the graveyard contains meaningful targets. Bringer is best when it returns a large board; Kavaero is better when selective nonland permanents are enough.
 5. Hold Bitter Triumph if a must-kill opposing threat is likely, otherwise use it to discard a payoff or clear pressure.
 6. Explain sequencing, mana, graveyard contents, opponent pressure, and the best alternative.
-
-Return only valid JSON with this shape:
-{
-  "recommended_action": <integer actionIndex>,
-  "reasoning": "short tactical explanation",
-  "alternatives": [{"action": <integer actionIndex>, "reasoning": "why it is next best"}]
-}
 """
+
+
+class Alternative(BaseModel):
+    action: int
+    reasoning: str
+
+
+class AdvisorResponse(BaseModel):
+    recommended_action: int
+    reasoning: str
+    alternatives: list[Alternative]
 
 
 class AdvisorError(RuntimeError):
@@ -192,57 +205,73 @@ def build_user_prompt(game_state, available_actions, game_log, deck_composition)
     )
 
 
-def call_anthropic(system_prompt, user_prompt, api_key=None, timeout=60):
-    """Call Anthropic Messages API and return the response text."""
-    key = api_key or os.environ.get("ANTHROPIC_API_KEY")
-    if not key:
-        raise AdvisorError("ANTHROPIC_API_KEY is not set")
-
-    body = {
-        "model": ANTHROPIC_MODEL,
-        "max_tokens": 900,
-        "temperature": 0.2,
-        "system": system_prompt,
+def _request_kwargs(user_prompt):
+    """Build the structured-output request shared by the sync and async paths."""
+    return {
+        "model": advisor_model(),
+        "max_tokens": MAX_TOKENS,
+        "system": [
+            {
+                "type": "text",
+                "text": SYSTEM_PROMPT,
+                "cache_control": {"type": "ephemeral"},
+            }
+        ],
         "messages": [{"role": "user", "content": user_prompt}],
+        "output_config": {"effort": advisor_effort()},
+        "output_format": AdvisorResponse,
+        "betas": [FALLBACK_BETA],
+        "fallbacks": "default",
     }
-    request = urllib.request.Request(
-        ANTHROPIC_URL,
-        data=json.dumps(body).encode("utf-8"),
-        headers={
-            "content-type": "application/json",
-            "anthropic-version": ANTHROPIC_VERSION,
-            "x-api-key": key,
-        },
-        method="POST",
-    )
+
+
+def _extract_parsed(response):
+    if response.stop_reason == "refusal":
+        raise AdvisorError("the model declined to answer (stop_reason=refusal)")
+    if response.stop_reason == "max_tokens":
+        raise AdvisorError("the response was truncated (stop_reason=max_tokens)")
+    parsed = response.parsed_output
+    if parsed is None:
+        raise AdvisorError("the model returned no structured output")
+    return parsed
+
+
+def _as_advisor_error(exc):
+    if isinstance(exc, anthropic.AuthenticationError):
+        return AdvisorError(f"Anthropic authentication failed: {exc}")
+    if isinstance(exc, anthropic.RateLimitError):
+        return AdvisorError(f"Anthropic rate limit reached: {exc}")
+    if isinstance(exc, anthropic.APIStatusError):
+        return AdvisorError(f"Anthropic API error {exc.status_code}: {exc}")
+    if isinstance(exc, anthropic.APIConnectionError):
+        return AdvisorError(f"Anthropic API connection failed: {exc}")
+    return AdvisorError(f"Anthropic request failed: {exc}")
+
+
+def _sync_client(timeout=REQUEST_TIMEOUT_SECONDS):
+    return anthropic.Anthropic().with_options(timeout=timeout)
+
+
+def _async_client(timeout=REQUEST_TIMEOUT_SECONDS):
+    return anthropic.AsyncAnthropic().with_options(timeout=timeout)
+
+
+def call_anthropic(user_prompt, timeout=REQUEST_TIMEOUT_SECONDS):
+    """Call the Messages API and return a validated AdvisorResponse."""
     try:
-        with urllib.request.urlopen(request, timeout=timeout) as response:
-            data = json.loads(response.read().decode("utf-8"))
-    except urllib.error.HTTPError as exc:
-        detail = exc.read().decode("utf-8", errors="replace")[:500]
-        raise AdvisorError(f"Anthropic API error {exc.code}: {detail}") from exc
-    except (urllib.error.URLError, TimeoutError, json.JSONDecodeError) as exc:
-        raise AdvisorError(f"Anthropic API request failed: {exc}") from exc
-
-    blocks = data.get("content", [])
-    text_parts = [block.get("text", "") for block in blocks if block.get("type") == "text"]
-    text = "\n".join(part for part in text_parts if part).strip()
-    if not text:
-        raise AdvisorError("Anthropic API returned no text content")
-    return text
+        response = _sync_client(timeout).beta.messages.parse(**_request_kwargs(user_prompt))
+    except anthropic.AnthropicError as exc:
+        raise _as_advisor_error(exc) from exc
+    return _extract_parsed(response)
 
 
-def parse_advisor_json(text):
+async def call_anthropic_async(user_prompt, timeout=REQUEST_TIMEOUT_SECONDS):
+    """Async variant of call_anthropic for the live dashboard."""
     try:
-        return json.loads(text)
-    except json.JSONDecodeError:
-        match = re.search(r"\{.*\}", text, re.DOTALL)
-        if not match:
-            raise AdvisorError("Advisor response did not contain JSON")
-        try:
-            return json.loads(match.group(0))
-        except json.JSONDecodeError as exc:
-            raise AdvisorError(f"Advisor response JSON was invalid: {exc}") from exc
+        response = await _async_client(timeout).beta.messages.parse(**_request_kwargs(user_prompt))
+    except anthropic.AnthropicError as exc:
+        raise _as_advisor_error(exc) from exc
+    return _extract_parsed(response)
 
 
 def heuristic_recommendation(game_state, available_actions, reason_prefix="Offline heuristic"):
@@ -356,25 +385,31 @@ def advise_move(game_state, available_actions, game_log=None, deck_composition=N
         deck_composition: cards remaining/visible by zone. Estimated if omitted.
         use_llm: when False, use the deterministic fallback only.
     """
-    game_log = game_log or []
-    available_actions = normalize_available_actions(available_actions)
-    deck_composition = deck_composition or summarize_deck_composition(game_state)
-    if not available_actions:
-        return heuristic_recommendation(game_state, available_actions)
-    if not use_llm:
-        return heuristic_recommendation(game_state, available_actions)
-
+    prepared = _prepare_llm_call(game_state, available_actions, game_log, deck_composition, use_llm)
+    if isinstance(prepared, dict):
+        return prepared
+    actions, prompt = prepared
     try:
-        text = call_anthropic(
-            SYSTEM_PROMPT,
-            build_user_prompt(game_state, available_actions, game_log, deck_composition),
-        )
-        parsed = parse_advisor_json(text)
-        return normalize_recommendation(parsed, available_actions, game_state)
+        parsed = call_anthropic(prompt)
     except AdvisorError as exc:
-        result = heuristic_recommendation(game_state, available_actions, reason_prefix="LLM unavailable; offline heuristic")
-        result["reasoning"] += f" ({exc})"
-        return result
+        return _llm_fallback(game_state, actions, exc)
+    return normalize_recommendation(parsed.model_dump(), actions, game_state)
+
+
+def _prepare_llm_call(game_state, available_actions, game_log, deck_composition, use_llm):
+    """Return a heuristic result dict, or (actions, prompt) for an LLM call."""
+    game_log = game_log or []
+    actions = normalize_available_actions(available_actions)
+    if not actions or not use_llm:
+        return heuristic_recommendation(game_state, actions)
+    deck_composition = deck_composition or summarize_deck_composition(game_state)
+    return actions, build_user_prompt(game_state, actions, game_log, deck_composition)
+
+
+def _llm_fallback(game_state, actions, exc):
+    result = heuristic_recommendation(game_state, actions, reason_prefix="LLM unavailable; offline heuristic")
+    result["reasoning"] += f" ({exc})"
+    return result
 
 
 def get_advice(game_state, actions, game_log=None, deck_info=None, use_llm=True):
@@ -383,8 +418,16 @@ def get_advice(game_state, actions, game_log=None, deck_info=None, use_llm=True)
 
 
 async def get_advice_async(game_state, actions, game_log=None, deck_info=None, use_llm=True):
-    """Run advisor work off the event loop for live dashboard use."""
-    return await asyncio.to_thread(get_advice, game_state, actions, game_log, deck_info, use_llm)
+    """Async advisor entry point for live dashboard use."""
+    prepared = _prepare_llm_call(game_state, actions, game_log, deck_info, use_llm)
+    if isinstance(prepared, dict):
+        return prepared
+    actions, prompt = prepared
+    try:
+        parsed = await call_anthropic_async(prompt)
+    except AdvisorError as exc:
+        return _llm_fallback(game_state, actions, exc)
+    return normalize_recommendation(parsed.model_dump(), actions, game_state)
 
 
 def _event_summary(event_type, data, state, card_db):
