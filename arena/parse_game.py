@@ -113,13 +113,49 @@ def response_word(response):
     return clean_enum(response, "OptionResponse_") or "Respond"
 
 
+# Known GRE prompt texts, used when the card database is not installed.
+PROMPT_TEXT_FALLBACK = {
+    78: "Select object to copy.",
+    1032: "Choose a nonland card.",
+    1034: "Discard two cards.",
+}
+
+
 class CardDatabase:
-    """Look up card names from the MTGA CardDatabase SQLite file."""
+    """Look up card names and prompt texts from the MTGA CardDatabase SQLite file."""
 
     def __init__(self, db_path=None):
         self._cache = {}
+        self._prompt_cache = {}
         found = find_card_db(db_path)
         self._db_path = str(found) if found else None
+
+    def get_prompt_text(self, prompt_id):
+        """Return the English text of a GRE promptId, or '' if unknown."""
+        if not prompt_id:
+            return ""
+        if prompt_id in self._prompt_cache:
+            return self._prompt_cache[prompt_id]
+        text = ""
+        if self._db_path:
+            try:
+                conn = sqlite3.connect(self._db_path)
+                cur = conn.cursor()
+                cur.execute(
+                    "SELECT l.Loc FROM Prompts p JOIN Localizations_enUS l "
+                    "ON p.LocId = l.LocId WHERE p.Id = ?",
+                    (prompt_id,),
+                )
+                row = cur.fetchone()
+                conn.close()
+                if row:
+                    text = row[0]
+            except Exception:
+                pass
+        if not text:
+            text = PROMPT_TEXT_FALLBACK.get(prompt_id, "")
+        self._prompt_cache[prompt_id] = text
+        return text
 
     def get_name(self, grp_id):
         if grp_id in self._cache:
@@ -322,9 +358,9 @@ def parse_log(log_path):
         i += 1
 
 
-def process_matches(log_path):
-    """Process all matches in a log file and print play-by-play."""
-    card_db = CardDatabase()
+def render_events(events, card_db=None):
+    """Render parsed log events into play-by-play lines and return them."""
+    card_db = card_db or CardDatabase()
     state = GameState()
     prev_turn = None
     prev_phase = None
@@ -428,7 +464,7 @@ def process_matches(log_path):
             return state.get_player_name(recipient.get("playerSystemSeatId"))
         return describe_object(recipient.get("damageRecipientInstanceId"))
 
-    for event_type, data in parse_log(log_path):
+    for event_type, data in events:
         if event_type == "match_state":
             mse = data["matchGameRoomStateChangedEvent"]
             gri = mse["gameRoomInfo"]
@@ -1025,28 +1061,39 @@ def process_matches(log_path):
                             target_name = state.get_card_name(tid, card_db)
                         out(f"    Target: {target_name}")
 
-            # Feature 5: Scry/Surveil choices
+            # Feature 5: SelectN choices (discard, tutor, copy target, scry, ...)
+            # The promptId names the choice: 1034 is "Discard two cards." —
+            # the Does Machines / Jadzi discard step, not a scry. Label the
+            # selection with the prompt text from the card database.
             elif msg_type == "ClientMessageType_SelectNResp":
                 resp_id = payload.get("respId")
-                req = state.pending_select_n.get(resp_id, {})
+                req = state.pending_select_n.pop(resp_id, {})
                 prompt = req.get("prompt", {})
-                prompt_id = prompt.get("promptId")
-                if prompt_id == 1034:
-                    selected_ids = payload.get("selectNResp", {}).get("ids", [])
-                    # The prompt parameters tell us which card triggered the scry
-                    params = prompt.get("parameters", [])
-                    source_id = None
-                    for p in params:
+                select_req = req.get("selectNReq", {})
+                selected_ids = payload.get("selectNResp", {}).get("ids", [])
+                if not req or not selected_ids:
+                    continue
+                source_id = select_req.get("sourceId")
+                if not source_id:
+                    for p in prompt.get("parameters", []):
                         if p.get("parameterName") == "CardId":
                             source_id = p.get("numberValue")
                             break
-                    source_name = state.get_card_name(source_id, card_db) if source_id else "effect"
-                    card_names = [state.get_card_name(sid, card_db) for sid in selected_ids]
-                    if card_names:
-                        out(f"    Scry ({source_name}): put {', '.join(card_names)} on bottom")
+                source_name = state.get_card_name(source_id, card_db) if source_id else "effect"
+                label = card_db.get_prompt_text(prompt.get("promptId")).rstrip(".") or "Select"
+                if select_req.get("idType") == "IdType_InstanceId":
+                    chosen = ", ".join(state.get_card_name(sid, card_db) for sid in selected_ids)
+                else:
+                    # Static option lists carry option ids, not card instances
+                    chosen = ", ".join(f"option {sid}" for sid in selected_ids)
+                out(f"    {our_name}: {label} ({source_name}): {chosen}")
 
-    # Print all output
-    for line in output_lines:
+    return output_lines
+
+
+def process_matches(log_path):
+    """Process all matches in a log file and print play-by-play."""
+    for line in render_events(parse_log(log_path)):
         print(line)
 
 

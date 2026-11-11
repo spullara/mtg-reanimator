@@ -58,6 +58,41 @@ folder. The tailer follows the rotation automatically.
 | macOS | Steam | `~/Library/Application Support/Steam/steamapps/common/MTGA/MTGA_Data` |
 | macOS | Wizards | `/Applications/MTGA.app/Contents/Resources/Data` |
 
+## Match archive
+
+Arena overwrites `Player.log` at each start, so at most two sessions
+survive on disk. The collector saves every finished match to its own JSON
+file: metadata, the parsed play-by-play, and the raw GRE lines, so a match
+can be re-parsed later.
+
+```bash
+# While Arena runs: save each match when it ends (Ctrl-C to stop)
+python3 -m arena.collect
+
+# Archive the matches in Player.log and Player-prev.log now, then exit
+python3 -m arena.collect --once
+```
+
+Captures go to `arena/captures/` (git-ignored — they hold account and
+session data; never commit them). Override with `--dir` or
+`ARENA_CAPTURES_DIR`. Matches already saved are skipped by match ID.
+
+## Strategy analysis
+
+```bash
+python3 arena/analyze_games.py [--captures DIR] [--out DIR] [--llm]
+```
+
+Extracts the player's decisions from the saved captures — mulligans, land
+sequencing (tapped / life paid), spells per turn, discard and mill
+choices, Beseech the Mirror fetches and bargains, the combo turn and copy
+target, interaction, and results. Writes one `decisions_<match>.json` per
+game, `summary.json`, and a plain-words `report.md` with the patterns the
+games show and the decisions that differ from the simulator's engine
+rules. `--llm` also sends the report (never the raw logs, and no account
+names) to the advisor's Anthropic model for a written discussion; the
+default is fully offline.
+
 ## Other tools
 
 ```bash
@@ -90,5 +125,8 @@ JSON report with the replay results and prints its path.
 | `paths.py` | Cross-platform discovery of Player.log and the card database |
 | `mtga_state.py` | Shared live game state built from GRE messages |
 | `parse_game.py` | Offline play-by-play parser for saved logs |
+| `collect.py` | Match archiver: one capture file per finished match |
+| `analyze_games.py` | Decision extraction and strategy report from captures |
 | `advisor.py` | LLM move advisor (Anthropic structured outputs) |
 | `web/` | Dashboard UI |
+| `captures/` | Saved matches (git-ignored; local only) |

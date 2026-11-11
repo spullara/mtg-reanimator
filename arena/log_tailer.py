@@ -88,13 +88,16 @@ class PlayerLogTailer:
     events since the last call. The file does not need to exist yet.
     """
 
-    def __init__(self, path, from_start=False):
+    def __init__(self, path, from_start=False, parser=None):
+        """`parser` is any object with feed(text) -> list and reset();
+        defaults to LogEventParser. collect.MatchSlicer uses this to get
+        whole matches from poll() instead of single events."""
         self.path = Path(path)
         self.prev_path = self.path.with_name("Player-prev.log")
         self._from_start = from_start
         self._offset = None  # None until the file is seen for the first time
         self._ino = None
-        self._parser = LogEventParser()
+        self._parser = parser or LogEventParser()
         self._decoder = codecs.getincrementaldecoder("utf-8")("replace")
 
     def poll(self):
