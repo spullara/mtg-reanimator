@@ -255,9 +255,23 @@ fn choose_passage_color(state: &GameState) -> String {
         return "B".to_string();
     }
 
+    // 2b. Turn on Willowrush Verge's {G} the same way: be an Island (blue
+    //     also helps Gloomlake) if no Forest or Island is on the battlefield
+    let willowrush = lands.iter().any(|p| p.card.name() == "Willowrush Verge")
+        || state.hand.cards().iter().any(|c| c.name() == "Willowrush Verge");
+    let has_forest_or_island = lands.iter()
+        .any(|p| crate::game::mana::basic_land_types(p).iter().any(|t| *t == 'U' || *t == 'G'));
+    if willowrush && !has_forest_or_island {
+        return "U".to_string();
+    }
+
     // 3. The color with the biggest shortfall (pips needed minus sources)
     let u_gap = u_need as i64 - u_src as i64;
     let b_gap = b_need as i64 - b_src as i64;
+    let g_gap = g_need as i64 - g_src as i64;
+    if g_gap > 0 && g_gap > u_gap && g_gap > b_gap {
+        return "G".to_string();
+    }
     if u_gap > 0 || b_gap > 0 {
         return if u_gap > b_gap { "U".to_string() } else { "B".to_string() };
     }
@@ -737,8 +751,8 @@ pub fn process_etb_triggers_verbose(
                 }
             }
             "etb_draw_2_discard_2" => {
-                // Kiora: draw 2, discard 2 - use the proper priority logic
-                resolve_kiora_etb(state, verbose);
+                // Kiora / Seasoned Cryomancer: draw 2, discard 2
+                resolve_draw_n_discard_n(state, 2, 2, verbose);
             }
             "etb_mill_3" => {
                 // Dark Matter Manipulator: mill 3
@@ -930,13 +944,16 @@ pub fn process_etb_triggers_verbose(
 
                 if spider_man_in_hand >= 1 {
                     // We have another Spider-Man - copy a mill creature to dig for Bringer
-                    // Priority: Overlord of the Balemurk > Dark Matter Manipulator > Kiora > Town Greeter
+                    // Priority: Overlord of the Balemurk > Dark Matter Manipulator > Kiora
+                    // > Seasoned Cryomancer > Town Greeter
                     let mill_creature = state.graveyard.cards().iter()
                         .position(|c| c.name() == "Overlord of the Balemurk")
                         .or_else(|| state.graveyard.cards().iter()
                             .position(|c| c.name() == "Dark Matter Manipulator"))
                         .or_else(|| state.graveyard.cards().iter()
                             .position(|c| c.name() == "Kiora, the Rising Tide"))
+                        .or_else(|| state.graveyard.cards().iter()
+                            .position(|c| c.name() == "Seasoned Cryomancer"))
                         .or_else(|| state.graveyard.cards().iter()
                             .position(|c| c.name() == "Town Greeter"));
 
@@ -964,9 +981,9 @@ pub fn process_etb_triggers_verbose(
                                 // Mill 3
                                 resolve_mill_n(state, 3, verbose);
                             }
-                            "Kiora, the Rising Tide" => {
+                            "Kiora, the Rising Tide" | "Seasoned Cryomancer" => {
                                 // Draw 2, discard 2
-                                resolve_kiora_etb(state, verbose);
+                                resolve_draw_n_discard_n(state, 2, 2, verbose);
                             }
                             "Town Greeter" => {
                                 // Mill 4, return a land
@@ -980,13 +997,16 @@ pub fn process_etb_triggers_verbose(
 
                 // Priority 4: Fallback copy targets - prefer the one that helps most:
                 // Marang (bounce ETB) > Valgavoth (Demon, Ardyn haste) > Deceit
+                // > Oblivious Bookworm (the copy loots at each end step)
                 let fallback_idx = state.graveyard.cards().iter()
                     .position(|c| c.name() == "Marang River Regent"
                         && !DecisionEngine::choose_bounce_targets(state, 1).is_empty())
                     .or_else(|| state.graveyard.cards().iter()
                         .position(|c| c.name() == "Valgavoth, Terror Eater"))
                     .or_else(|| state.graveyard.cards().iter()
-                        .position(|c| c.name() == "Deceit"));
+                        .position(|c| c.name() == "Deceit"))
+                    .or_else(|| state.graveyard.cards().iter()
+                        .position(|c| c.name() == "Oblivious Bookworm"));
 
                 if let Some(idx) = fallback_idx {
                     let creature_name = state.graveyard.cards()[idx].name().to_string();
@@ -1200,8 +1220,8 @@ pub fn resolve_bringer_etb(state: &mut GameState, rng: &mut crate::rng::GameRng,
     // Step 3: Resolve ETBs for reanimated creatures
     for creature in &creatures_to_reanimate {
         match creature.name() {
-            "Kiora, the Rising Tide" => {
-                resolve_kiora_etb(state, verbose);
+            "Kiora, the Rising Tide" | "Seasoned Cryomancer" => {
+                resolve_draw_n_discard_n(state, 2, 2, verbose);
             }
             "Town Greeter" => {
                 resolve_town_greeter_etb(state, verbose);
@@ -1319,6 +1339,7 @@ pub fn resolve_surveil(state: &mut GameState, count: usize, verbose: bool) {
                 || card_name == "Valgavoth, Terror Eater"
                 || card_name == "Marang River Regent"
                 || card_name == "Deceit"
+                || card_name == "Wistfulness"
                 || (card_name == "Kiora, the Rising Tide" && has_kiora_in_hand)
                 || card_name == "Town Greeter"; // Cheap 1/1, better to reanimate than draw
 
@@ -1477,45 +1498,6 @@ pub fn resolve_town_greeter_etb(state: &mut GameState, verbose: bool) {
         } else {
             state.graveyard.add_card(card);
         }
-    }
-}
-
-/// Resolve Kiora's ETB ability: draw 2, discard 2.
-/// Discards use the shared DecisionEngine::choose_discard priority
-/// (reanimation targets first, then blanks, then the last non-Spider-Man card).
-pub fn resolve_kiora_etb(state: &mut GameState, verbose: bool) {
-    // Draw 2, discard 2
-    let hand_before = state.hand.size();
-    state.draw_card();
-    state.draw_card();
-
-    // Collect drawn cards for logging
-    let drawn: Vec<String> = state.hand.cards()
-        .iter()
-        .skip(hand_before)
-        .map(|c| c.name().to_string())
-        .collect();
-
-    if verbose {
-        println!("    Kiora ETB: drew {}", drawn.join(", "));
-    }
-
-    // Discard 2 - shared priority: reanimation targets first, then blanks
-    let mut discarded: Vec<String> = Vec::new();
-    for _ in 0..2 {
-        if let Some(idx) = DecisionEngine::choose_discard(state) {
-            if let Some(card) = state.hand.remove_card(idx) {
-                let card_name = card.name().to_string();
-                state.graveyard.add_card(card);
-                discarded.push(card_name);
-            }
-        } else {
-            break;
-        }
-    }
-
-    if verbose {
-        println!("    Kiora ETB: discarded {}", discarded.join(", "));
     }
 }
 
@@ -1830,6 +1812,72 @@ pub fn can_afford_deceit_evoke(state: &GameState) -> bool {
     costs.iter().any(|c| crate::game::mana::can_afford_cost(c, state, None))
 }
 
+/// Wistfulness's evoke cost is {G/U}{G/U}. Pay {U}{U} when possible: that mode
+/// draws two cards, then discards one. Otherwise pay any mix (the {G}{G} mode
+/// exiles an opponent's artifact or enchantment, which does nothing here).
+/// Returns (cost, loot).
+pub fn wistfulness_evoke_payment(state: &GameState) -> (ManaCost, bool) {
+    let uu = ManaCost { blue: 2, ..Default::default() };
+    if crate::game::mana::can_afford_cost(&uu, state, None) {
+        return (uu, true);
+    }
+    let gg = ManaCost { green: 2, ..Default::default() };
+    let gu = ManaCost { green: 1, blue: 1, ..Default::default() };
+    for cost in [gu, gg.clone()] {
+        if crate::game::mana::can_afford_cost(&cost, state, None) {
+            return (cost, false);
+        }
+    }
+    (gg, false)
+}
+
+/// Check whether Wistfulness can be evoked right now ({G/U}{G/U} in any mix)
+pub fn can_afford_wistfulness_evoke(state: &GameState) -> bool {
+    let costs = [
+        ManaCost { blue: 2, ..Default::default() },
+        ManaCost { green: 1, blue: 1, ..Default::default() },
+        ManaCost { green: 2, ..Default::default() },
+    ];
+    costs.iter().any(|c| crate::game::mana::can_afford_cost(c, state, None))
+}
+
+/// Beginning of our end step: each Oblivious Bookworm (or a copy of it) may
+/// draw a card, then discards a card (nothing in this deck enters face down)
+pub fn resolve_end_step_triggers(state: &mut GameState, verbose: bool) {
+    let bookworms = state.battlefield.permanents().iter()
+        .filter(|p| p.card.name() == "Oblivious Bookworm"
+            || p.is_copy_of == Some("Oblivious Bookworm"))
+        .count();
+    for _ in 0..bookworms {
+        if verbose {
+            println!("  [End step] Oblivious Bookworm: draw 1, discard 1");
+        }
+        resolve_draw_n_discard_n(state, 1, 1, verbose);
+    }
+}
+
+/// Seasoned Cryomancer's graveyard ability: {3}{U}{U}, exile it from the
+/// graveyard, draw two cards. Uses spare mana, one activation per Cryomancer.
+pub fn activate_cryomancer_from_graveyard(state: &mut GameState, verbose: bool) {
+    let cost = ManaCost { blue: 2, generic: 3, ..Default::default() };
+    while let Some(idx) = state.graveyard.cards().iter()
+        .position(|c| c.name() == "Seasoned Cryomancer")
+    {
+        if !crate::game::mana::can_afford_cost(&cost, state, None)
+            || !crate::game::mana::tap_lands_for_cost(&cost, state, None)
+        {
+            break;
+        }
+        if let Some(card) = state.graveyard.remove_card(idx) {
+            state.add_to_exile(card);
+        }
+        if verbose {
+            println!("  [Activate] Seasoned Cryomancer: {{3}}{{U}}{{U}}, exile from graveyard -> draw 2");
+        }
+        resolve_draw_n_discard_n(state, 2, 0, verbose);
+    }
+}
+
 /// Resolve Formidable Speaker's ETB ability
 ///
 /// May discard a card to search library for a creature card and put it into hand.
@@ -2051,6 +2099,30 @@ pub fn resolve_formidable_speaker_etb(state: &mut GameState, rng: &mut crate::rn
                     }
                     // If we have everything, don't waste the ability
                 }
+            }
+        }
+    }
+
+    // Fallback: discard the card the shared discard choice picks (never
+    // Spider-Man) and tutor Spider-Man when a combo target is in the graveyard,
+    // or Bringer when neither the graveyard nor the hand has one
+    if tutor_target.is_none() {
+        let bringer_in_library = state.library.cards().iter()
+            .any(|c| c.name() == "Bringer of the Last Gift");
+        let fallback_tutor = if has_bringer_in_gy && !has_spider_man && spider_in_library {
+            Some("Superior Spider-Man")
+        } else if !has_bringer_in_gy && !has_bringer_in_hand && bringer_in_library {
+            Some("Bringer of the Last Gift")
+        } else {
+            None
+        };
+        if let Some(tutor) = fallback_tutor {
+            let discard = DecisionEngine::choose_discard(state)
+                .map(|i| &state.hand.cards()[i])
+                .filter(|c| c.name() != "Superior Spider-Man");
+            if let Some(card) = discard {
+                discard_target = Some(card.name().to_string());
+                tutor_target = Some(tutor.to_string());
             }
         }
     }
@@ -3167,5 +3239,45 @@ mod new_card_tests {
         // Terror was mass-reanimated
         assert!(state.battlefield.permanents().iter().any(|p| p.card.name() == "Terror of the Peaks"));
         assert!(state.library.cards().iter().all(|c| c.name() != "Superior Spider-Man"));
+    }
+
+    #[test]
+    fn test_seasoned_cryomancer_etb_and_graveyard_draw() {
+        let db = load_db();
+        let mut state = GameState::new();
+        state.turn = 3;
+        for _ in 0..4 {
+            state.library.add_card(db.get_card("Forest").expect("Forest"));
+        }
+        state.hand.add_card(db.get_card("Bringer of the Last Gift").expect("Bringer"));
+
+        // ETB: draw 2, then discard 2 (Bringer first)
+        let cryo = db.get_card("Seasoned Cryomancer").expect("Cryomancer");
+        let mut perm = Permanent::new(cryo.clone(), 3);
+        state.battlefield.add_permanent(perm.clone());
+        let mut rng = GameRng::new(Some(1));
+        process_etb_triggers_verbose(&mut state, &mut perm, &db, false, &mut rng)
+            .expect("ETB should resolve");
+        assert!(state.graveyard.cards().iter().any(|c| c.name() == "Bringer of the Last Gift"));
+        assert_eq!(state.graveyard.cards().len(), 2);
+        assert_eq!(state.hand.size(), 1);
+
+        // Graveyard ability needs {3}{U}{U}: four Islands are not enough
+        let mut state = GameState::new();
+        for _ in 0..4 {
+            state.library.add_card(db.get_card("Forest").expect("Forest"));
+            state.battlefield.add_permanent(Permanent::new(db.get_card("Island").expect("Island"), 1));
+        }
+        state.graveyard.add_card(cryo);
+        activate_cryomancer_from_graveyard(&mut state, false);
+        assert_eq!(state.graveyard.cards().len(), 1, "cannot pay with 4 lands");
+        assert_eq!(state.hand.size(), 0);
+
+        // With a fifth land: exile it and draw 2
+        state.battlefield.add_permanent(Permanent::new(db.get_card("Island").expect("Island"), 1));
+        activate_cryomancer_from_graveyard(&mut state, false);
+        assert_eq!(state.graveyard.cards().len(), 0);
+        assert_eq!(state.hand.size(), 2);
+        assert!(state.battlefield.permanents().iter().all(|p| p.tapped));
     }
 }

@@ -10,6 +10,7 @@ pub const REANIMATION_TARGETS: &[&str] = &[
     "Valgavoth, Terror Eater",
     "Terror of the Peaks",
     "Marang River Regent",
+    "Wistfulness",
     "Deceit",
     "Ardyn, the Usurper",
 ];
@@ -344,7 +345,10 @@ impl DecisionEngine {
         // Priority 2: Kiora
         if let Some(idx) = milled.iter().position(|c| c.name() == "Kiora, the Rising Tide") { return Some(idx); }
         // Priority 3: Blue-producing lands
-        let blue_lands = ["Watery Grave", "Undercity Sewers", "Gloomlake Verge", "Island"];
+        let blue_lands = [
+            "Watery Grave", "Undercity Sewers", "Gloomlake Verge", "Island",
+            "Breeding Pool", "Willowrush Verge",
+        ];
         for (idx, card) in milled.iter().enumerate() {
             if let Card::Land(land) = card {
                 if blue_lands.contains(&land.base.name.as_str()) { return Some(idx); }

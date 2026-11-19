@@ -30,6 +30,9 @@ fn is_mill_enabler(card: &Card) -> bool {
             | "Bellowing Crier"
             | "Yuriko, Hope from the Shadows"
             | "Theorix Charm"
+            | "Oblivious Bookworm"
+            | "Seasoned Cryomancer"
+            | "Wistfulness"
     )
 }
 

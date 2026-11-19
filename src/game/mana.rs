@@ -137,9 +137,6 @@ impl Default for ManaPool {
     }
 }
 
-/// Get the colors a land can tap for as bitflags (no allocations)
-/// Handles special lands like Cavern of Souls, Verge lands, Starting Town
-#[inline]
 /// Basic land types of a permanent, as color letters: Island = U, Swamp = B,
 /// Mountain = R, Forest = G. Multiversal Passage has the type it chose as it
 /// entered. Used by the Verge conditions ("if you control an Island or a Swamp").
@@ -151,7 +148,8 @@ pub fn basic_land_types(permanent: &Permanent) -> &'static [char] {
         "Mountain" => &['R'],
         "Forest" => &['G'],
         "Watery Grave" | "Undercity Sewers" => &['U', 'B'],
-        "Underground Mortuary" => &['B', 'G'],
+        "Underground Mortuary" | "Overgrown Tomb" => &['B', 'G'],
+        "Breeding Pool" => &['U', 'G'],
         "Blood Crypt" => &['B', 'R'],
         "Multiversal Passage" => match permanent.chosen_basic_type.as_deref() {
             Some("U") => &['U'],
@@ -170,6 +168,9 @@ fn controls_basic_type(state: &GameState, types: &[char]) -> bool {
         .any(|p| basic_land_types(p).iter().any(|t| types.contains(t)))
 }
 
+/// Get the colors a land can tap for as bitflags (no allocations)
+/// Handles special lands like Cavern of Souls, Verge lands, Starting Town
+#[inline]
 pub fn can_tap_for_mana(
     permanent: &Permanent,
     state: &GameState,
@@ -215,6 +216,14 @@ pub fn can_tap_for_mana(
         let has_island_or_swamp = controls_basic_type(state, &['U', 'B']);
         if has_island_or_swamp {
             return ColorFlags(ColorFlags::BLUE | ColorFlags::BLACK);
+        }
+        return ColorFlags(ColorFlags::BLUE);
+    }
+
+    // Handle Willowrush Verge - {G} only if controlling Forest/Island
+    if land.base.name == "Willowrush Verge" {
+        if controls_basic_type(state, &['U', 'G']) {
+            return ColorFlags(ColorFlags::BLUE | ColorFlags::GREEN);
         }
         return ColorFlags(ColorFlags::BLUE);
     }
@@ -587,6 +596,38 @@ mod tests {
         state2.battlefield.add_permanent(Permanent::new(db.get_card("Blood Crypt").expect("Blood Crypt"), 1));
         let colors = can_tap_for_mana(&blazemire, &state2, None);
         assert!(colors.has_red(), "Blood Crypt has the Swamp and Mountain types");
+    }
+
+    #[test]
+    fn test_willowrush_verge_green_condition() {
+        use crate::card::CardDatabase;
+        use crate::game::zones::Permanent;
+
+        let db = CardDatabase::from_file("cards.json").expect("Failed to load cards");
+        let willowrush = Permanent::new(db.get_card("Willowrush Verge").expect("Willowrush"), 1);
+
+        let mut state = GameState::new();
+        let colors = can_tap_for_mana(&willowrush, &state, None);
+        assert!(colors.has_blue());
+        assert!(!colors.has_green(), "No green without a Forest or an Island");
+
+        // Overgrown Tomb is a Swamp Forest: the Forest type turns on green
+        state.battlefield.add_permanent(Permanent::new(db.get_card("Overgrown Tomb").expect("Tomb"), 1));
+        assert!(can_tap_for_mana(&willowrush, &state, None).has_green());
+
+        // Breeding Pool (Forest Island) also turns on green
+        let mut state2 = GameState::new();
+        state2.battlefield.add_permanent(Permanent::new(db.get_card("Breeding Pool").expect("Pool"), 1));
+        assert!(can_tap_for_mana(&willowrush, &state2, None).has_green());
+
+        // Gloomlake Verge is not an Island: still no green
+        let mut state3 = GameState::new();
+        state3.battlefield.add_permanent(Permanent::new(db.get_card("Gloomlake Verge").expect("Gloomlake"), 1));
+        assert!(!can_tap_for_mana(&willowrush, &state3, None).has_green());
+
+        // Breeding Pool is an Island, so it also turns on Gloomlake Verge's black
+        let gloomlake = Permanent::new(db.get_card("Gloomlake Verge").expect("Gloomlake"), 1);
+        assert!(can_tap_for_mana(&gloomlake, &state2, None).has_black());
     }
 
     #[test]

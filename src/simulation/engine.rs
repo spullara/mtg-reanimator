@@ -319,6 +319,7 @@ pub fn execute_turn(state: &mut GameState, db: &CardDatabase, verbose: bool, rng
 
     // End phase
     state.phase = crate::game::state::Phase::End;
+    cards::resolve_end_step_triggers(state, verbose);
     end_phase(state);
 
     if verbose {
@@ -756,6 +757,10 @@ pub fn main_phase(state: &mut GameState, db: &CardDatabase, verbose: bool, rng: 
                 if c.name() == "Deceit" {
                     return cards::can_afford_deceit_evoke(state);
                 }
+                // Wistfulness likewise: always evoked for {G/U}{G/U}
+                if c.name() == "Wistfulness" {
+                    return cards::can_afford_wistfulness_evoke(state);
+                }
 
                 if !mana::can_cast_spell(c, state) {
                     return false;
@@ -821,6 +826,7 @@ pub fn main_phase(state: &mut GameState, db: &CardDatabase, verbose: bool, rng: 
                                     "Overlord of the Balemurk" |
                                     "Dark Matter Manipulator" |
                                     "Kiora, the Rising Tide" |
+                                    "Seasoned Cryomancer" |
                                     "Town Greeter"));
 
                             if spider_man_count < 2 || !has_mill_creature_in_gy {
@@ -874,6 +880,8 @@ pub fn main_phase(state: &mut GameState, db: &CardDatabase, verbose: bool, rng: 
                     "Does Machines",
                     "Roiling Dragonstorm",
                     "Bellowing Crier",
+                    "Seasoned Cryomancer",
+                    "Wistfulness",
                 ] {
                     if a_card.name() == outlet {
                         return std::cmp::Ordering::Less;
@@ -919,6 +927,9 @@ pub fn main_phase(state: &mut GameState, db: &CardDatabase, verbose: bool, rng: 
                 "Bellowing Crier",
                 "Yuriko, Hope from the Shadows",
                 "Theorix Charm",
+                "Oblivious Bookworm",
+                "Seasoned Cryomancer",
+                "Wistfulness",
             ];
             let a_is_mill = mill_spells.contains(&a_card.name());
             let b_is_mill = mill_spells.contains(&b_card.name());
@@ -960,6 +971,26 @@ pub fn main_phase(state: &mut GameState, db: &CardDatabase, verbose: bool, rng: 
                             cards::resolve_bounce_recast_targets(state, 1, verbose);
                         }
                         state.graveyard.add_card(card);
+                        cast_any = true;
+                    } else {
+                        state.hand.add_card(card);
+                    }
+                    continue;
+                }
+
+                // Wistfulness is always evoked; paid with {U}{U}, its ETB draws
+                // two cards, then discards one. The evoke sacrifice goes on the
+                // stack first, so it is in the graveyard before the loot.
+                if card_name == "Wistfulness" {
+                    let (cost, loot) = cards::wistfulness_evoke_payment(state);
+                    if mana::tap_lands_for_cost(&cost, state, None) {
+                        if verbose {
+                            println!("  [Cast] Wistfulness (evoke{})", if loot { ", paid {U}{U}" } else { "" });
+                        }
+                        state.graveyard.add_card(card);
+                        if loot {
+                            cards::resolve_draw_n_discard_n(state, 2, 1, verbose);
+                        }
                         cast_any = true;
                     } else {
                         state.hand.add_card(card);
@@ -1060,6 +1091,9 @@ pub fn main_phase(state: &mut GameState, db: &CardDatabase, verbose: bool, rng: 
             }
         }
     }
+
+    // STEP 4b: Seasoned Cryomancer's graveyard ability with spare mana
+    cards::activate_cryomancer_from_graveyard(state, verbose);
 
     // STEP 5: Grim Bauble surveil 2 ({2}{B}, {T}, Sacrifice). An artifact has no
     // summoning sickness, so it can activate the turn it enters. This runs after
@@ -1236,6 +1270,78 @@ pub fn run_game(
 mod tests {
     use super::*;
     use crate::card::types::{BaseCard, CreatureCard, LandCard};
+
+    fn load_db() -> CardDatabase {
+        CardDatabase::from_file("cards.json").expect("Failed to load cards")
+    }
+
+    #[test]
+    fn test_oblivious_bookworm_loots_at_end_step() {
+        let db = load_db();
+        let mut state = GameState::new();
+        state.turn = 1;
+        state.battlefield.add_permanent(crate::game::zones::Permanent::new(
+            db.get_card("Oblivious Bookworm").expect("Bookworm"), 1));
+        // Turn 2 draws the Forest; the end step draws Terror and discards it
+        state.library.add_card(db.get_card("Forest").expect("Forest"));
+        state.library.add_card(db.get_card("Terror of the Peaks").expect("Terror"));
+        state.library.add_card(db.get_card("Forest").expect("Forest"));
+
+        let mut rng = GameRng::new(Some(1));
+        execute_turn(&mut state, &db, false, &mut rng);
+
+        assert_eq!(state.opponent_life, 18, "Bookworm attacks for 2");
+        assert_eq!(state.library.size(), 1, "draw step + end-step draw");
+        assert!(state.graveyard.cards().iter().any(|c| c.name() == "Terror of the Peaks"));
+        assert_eq!(state.hand.size(), 0, "Forest played, Terror discarded");
+    }
+
+    #[test]
+    fn test_wistfulness_evoke_uu_loots() {
+        let db = load_db();
+        let mut state = GameState::new();
+        state.turn = 2;
+        state.land_played_this_turn = true;
+        for _ in 0..2 {
+            state.battlefield.add_permanent(crate::game::zones::Permanent::new(
+                db.get_card("Watery Grave").expect("Watery Grave"), 1));
+        }
+        state.hand.add_card(db.get_card("Wistfulness").expect("Wistfulness"));
+        state.library.add_card(db.get_card("Bringer of the Last Gift").expect("Bringer"));
+        state.library.add_card(db.get_card("Forest").expect("Forest"));
+
+        let mut rng = GameRng::new(Some(1));
+        main_phase(&mut state, &db, false, &mut rng);
+
+        // Evoked for {U}{U}: Wistfulness in the graveyard, drew 2, discarded Bringer
+        assert!(state.battlefield.permanents().iter().all(|p| p.tapped));
+        assert!(state.battlefield.permanents().iter().all(|p| p.card.name() != "Wistfulness"));
+        let gy: Vec<&str> = state.graveyard.cards().iter().map(|c| c.name()).collect();
+        assert!(gy.contains(&"Wistfulness"));
+        assert!(gy.contains(&"Bringer of the Last Gift"));
+        assert_eq!(state.hand.size(), 1);
+        assert_eq!(state.library.size(), 0);
+    }
+
+    #[test]
+    fn test_wistfulness_evoke_without_uu_does_not_loot() {
+        let db = load_db();
+        let mut state = GameState::new();
+        state.turn = 2;
+        state.land_played_this_turn = true;
+        for name in ["Overgrown Tomb", "Breeding Pool"] {
+            state.battlefield.add_permanent(crate::game::zones::Permanent::new(
+                db.get_card(name).expect(name), 1));
+        }
+        state.hand.add_card(db.get_card("Wistfulness").expect("Wistfulness"));
+        state.library.add_card(db.get_card("Forest").expect("Forest"));
+
+        let mut rng = GameRng::new(Some(1));
+        main_phase(&mut state, &db, false, &mut rng);
+
+        assert!(state.graveyard.cards().iter().any(|c| c.name() == "Wistfulness"));
+        assert_eq!(state.library.size(), 1, "{{G}}{{U}} payment: no draw");
+    }
 
     #[test]
     fn test_check_win_condition_false() {
