@@ -1,4 +1,4 @@
-use crate::card::{Card, CardDatabase, CardType, LandSubtype, ManaCost};
+use crate::card::{Card, CardDatabase, CardType, CreatureCard, LandSubtype, ManaCost};
 use crate::game::state::GameState;
 use crate::game::zones::{CounterType, Permanent};
 use crate::simulation::decisions::DecisionEngine;
@@ -1101,14 +1101,25 @@ pub fn resolve_draw_n_discard_n(state: &mut GameState, draw: usize, discard: usi
     }
 }
 
-/// Resolve Bringer of the Last Gift ETB: sacrifice all other creatures, then mass reanimate
-///
-/// EXACT LOGIC FROM TYPESCRIPT resolveBringerETB:
-/// 1. Sacrifice all other creatures (except impending ones with time counters)
-/// 2. Return ALL creature cards from graveyard to battlefield
-/// 3. Trigger Terror of the Peaks for each creature entering
+/// Resolve Bringer of the Last Gift ETB. Oracle text: "each player sacrifices
+/// all other creatures they control. Then each player returns all creature
+/// cards from their graveyard that weren't put there this way to the
+/// battlefield."
+/// 1. The creature cards already in the graveyard are the ones that return.
+/// 2. Sacrifice all other creatures (impending ones with time counters are not
+///    creatures and survive). The sacrificed creatures STAY in the graveyard.
+/// 3. Return the cards from step 1, resolve their ETBs and Terror triggers.
 pub fn resolve_bringer_etb(state: &mut GameState, rng: &mut crate::rng::GameRng, verbose: bool) {
-    // Step 1: Sacrifice all other creatures (move to graveyard)
+    // Step 1: the creature cards that return are the ones in the graveyard
+    // before the sacrifice
+    let mut creatures_to_reanimate: Vec<Card> = state.graveyard.cards()
+        .iter()
+        .filter(|c| matches!(c, Card::Creature(_)))
+        .cloned()
+        .collect();
+    state.graveyard.clear_creatures();
+
+    // Step 2: Sacrifice all other creatures (they go to the graveyard and stay)
     // NOTE: Impending creatures (with time counters) are NOT creatures yet - they're enchantments!
     // NOTE: We need to find the Spider-Man that just entered (the one copying Bringer)
     // and exclude it from sacrifice. It's the last permanent added to the battlefield.
@@ -1150,13 +1161,6 @@ pub fn resolve_bringer_etb(state: &mut GameState, rng: &mut crate::rng::GameRng,
         }
     }
 
-    // Step 2: Return ALL creature cards from graveyard to battlefield
-    let creatures_to_reanimate: Vec<Card> = state.graveyard.cards()
-        .iter()
-        .filter(|c| matches!(c, Card::Creature(_)))
-        .cloned()
-        .collect();
-
     if verbose && !creatures_to_reanimate.is_empty() {
         let names: Vec<String> = creatures_to_reanimate.iter()
             .map(|c| c.name().to_string())
@@ -1175,19 +1179,22 @@ pub fn resolve_bringer_etb(state: &mut GameState, rng: &mut crate::rng::GameRng,
         // Note: Terror might also be in creatures_to_reanimate, but Spider-Man
         // copies from graveyard, so we check if Terror is there
         let terror_in_graveyard = state.graveyard.cards().iter()
-            .any(|c| c.name() == "Terror of the Peaks");
+            .position(|c| c.name() == "Terror of the Peaks");
+        let terror_returning = creatures_to_reanimate.iter()
+            .position(|c| c.name() == "Terror of the Peaks");
 
-        if terror_in_graveyard {
+        if terror_in_graveyard.is_some() || terror_returning.is_some() {
             if verbose {
                 println!("    Superior Spider-Man (reanimated) copies Terror of the Peaks!");
             }
-            // Remove Terror from graveyard and exile it
-            if let Some(idx) = state.graveyard.cards().iter()
-                .position(|c| c.name() == "Terror of the Peaks")
-            {
-                if let Some(terror) = state.graveyard.remove_card(idx) {
-                    state.exile.add_card(terror);
-                }
+            // The copied card is exiled (it does not also return)
+            let copied = if let Some(idx) = terror_in_graveyard {
+                state.graveyard.remove_card(idx)
+            } else {
+                terror_returning.map(|idx| creatures_to_reanimate.remove(idx))
+            };
+            if let Some(terror) = copied {
+                state.exile.add_card(terror);
             }
             Some("Terror of the Peaks")
         } else {
@@ -1199,9 +1206,6 @@ pub fn resolve_bringer_etb(state: &mut GameState, rng: &mut crate::rng::GameRng,
     } else {
         None
     };
-
-    // Remove remaining creatures from graveyard
-    state.graveyard.clear_creatures();
 
     // Add to battlefield
     for creature in &creatures_to_reanimate {
@@ -2169,222 +2173,103 @@ pub fn resolve_formidable_speaker_etb(state: &mut GameState, rng: &mut crate::rn
     }
 }
 
-/// Check if Ardyn, the Usurper is on the battlefield
-fn has_ardyn_on_battlefield(state: &GameState) -> bool {
-    state.battlefield.permanents().iter().any(|p| {
-        p.card.name() == "Ardyn, the Usurper"
-            || p.is_copy_of.as_deref() == Some("Ardyn, the Usurper")
-    })
-}
 
-/// Check if a creature card is a Demon
-fn is_creature_demon(card: &Card) -> bool {
-    match card {
-        Card::Creature(c) => c.creature_types.iter().any(|t| t == "Demon"),
-        _ => false,
+
+/// The creature cards that the combo returns: every creature card in the
+/// graveyard except one Bringer (the card Spider-Man copies is exiled).
+/// Creatures on the battlefield are sacrificed by Bringer's trigger and stay in
+/// the graveyard (oracle: cards "that weren't put there this way" return).
+fn combo_returning_creatures(state: &GameState) -> Vec<&CreatureCard> {
+    let mut copied_bringer_skipped = false;
+    let mut out = Vec::new();
+    for card in state.graveyard.cards() {
+        if let Card::Creature(c) = card {
+            if !copied_bringer_skipped && c.base.name == "Bringer of the Last Gift" {
+                copied_bringer_skipped = true;
+                continue;
+            }
+            out.push(c);
+        }
     }
+    out
 }
 
-/// Calculate total damage from the combo if cast now
-///
-/// Damage sources:
-/// 1. Terror triggers from creatures entering (both from battlefield and graveyard)
-/// 2. Combat damage from creatures already on battlefield (no summoning sickness)
-/// 3. Combat damage from Demons with haste (if Ardyn is on battlefield)
+/// Damage on the combo turn when Spider-Man copies Bringer NOW.
+/// - Terrors on the battlefield trigger once, for Spider-Man entering (4 power,
+///   user rule: copies are 4/4). Then Bringer's trigger sacrifices them, so they
+///   do not trigger for the returning creatures.
+/// - Each returning Terror triggers for each OTHER creature that returns with it.
+/// - Combat this turn: creatures on the battlefield are sacrificed before combat.
+///   Only hasty creatures attack: with a returning Ardyn, Demons have haste
+///   (Spider-Man copying Bringer is a Demon).
 pub fn calculate_combo_damage(state: &GameState) -> u32 {
-    // Check if Ardyn is on battlefield (Demons get haste)
-    let ardyn_on_battlefield = has_ardyn_on_battlefield(state);
-
-    // Creatures that would be reanimated from graveyard
-    let creatures_in_graveyard: Vec<&Card> = state
-        .graveyard
-        .cards()
-        .iter()
-        .filter(|c| matches!(c, Card::Creature(_)))
-        .collect();
-
-    // User rule: anything Superior Spider-Man copies is a 4/4. The copy enters
-    // as Bringer in name and types, but with Spider-Man's own 4 power.
     const SPIDER_COPY_POWER: u32 = 4;
+    let returning = combo_returning_creatures(state);
 
-    // Count Terrors that will be on battlefield after combo
-    let terrors_in_graveyard = creatures_in_graveyard
-        .iter()
-        .filter(|c| c.name() == "Terror of the Peaks")
-        .count() as u32;
-
-    let terrors_on_battlefield = state
-        .battlefield
-        .permanents()
-        .iter()
+    let terrors_on_battlefield = state.battlefield.permanents().iter()
         .filter(|p| {
-            p.card.name() == "Terror of the Peaks" || p.is_copy_of.as_deref() == Some("Terror of the Peaks")
+            matches!(p.card, Card::Creature(_))
+                && p.get_counter(CounterType::Time) == 0
+                && (p.card.name() == "Terror of the Peaks"
+                    || p.is_copy_of.as_deref() == Some("Terror of the Peaks"))
         })
         .count() as u32;
+    let mut damage = SPIDER_COPY_POWER * terrors_on_battlefield;
 
-    // Calculate Terror trigger damage (IMMEDIATE)
-    // When Spider-Man enters as a copy of Bringer, creatures are reanimated
-    // Each Terror triggers for each creature entering (except itself)
-    //
-    // IMPORTANT: Spider-Man entering does NOT trigger Terrors because Terror is
-    // still in the graveyard at that point. Terrors only trigger for the creatures
-    // that enter simultaneously with them during the mass reanimate.
-
-    let mut terror_damage = 0u32;
-
-    // Terrors already on battlefield trigger for EACH creature entering (including Spider-Man)
-    if terrors_on_battlefield > 0 {
-        terror_damage += SPIDER_COPY_POWER * terrors_on_battlefield;
-        for creature in &creatures_in_graveyard {
-            if let Card::Creature(c) = creature {
-                terror_damage += c.power * terrors_on_battlefield;
-            }
-        }
-    }
-
-    // Terrors from graveyard trigger for creatures entering AT THE SAME TIME (during mass reanimate)
-    // They DON'T trigger for Spider-Man (Spider-Man entered BEFORE the mass reanimate)
-    // They trigger for all other creatures entering simultaneously, but NOT for themselves
-    if terrors_in_graveyard > 0 {
-        // Each creature from graveyard triggers Terrors from graveyard (except Terror doesn't trigger for itself)
-        for creature in &creatures_in_graveyard {
-            if let Card::Creature(c) = creature {
-                if c.base.name == "Terror of the Peaks" {
-                    // A Terror entering triggers all OTHER Terrors (from graveyard only - battlefield Terrors already triggered above)
-                    terror_damage += c.power * (terrors_in_graveyard - 1);
-                } else {
-                    terror_damage += c.power * terrors_in_graveyard;
-                }
-            }
-        }
-    }
-
-    // Combat damage from creatures that can attack THIS turn (already on battlefield, no summoning sickness)
-    // These creatures will attack after we cast the combo in main phase 1
-    // Exception: Demons have haste if Ardyn is on battlefield
-    let current_combat_power: u32 = state
-        .battlefield
-        .permanents()
-        .iter()
-        .filter(|p| {
-            if !matches!(p.card, Card::Creature(_)) {
-                return false;
-            }
-            // Check for impending counters
-            if let Some(counter_count) = p.counters.get(&crate::game::zones::CounterType::Time) {
-                if *counter_count > 0 {
-                    return false;
-                }
-            }
-            // Check summoning sickness
-            let has_summoning_sickness = state.turn <= p.turn_entered;
-            if has_summoning_sickness {
-                // Demons get haste from Ardyn
-                if ardyn_on_battlefield && is_creature_demon(&p.card) {
-                    return true; // Can attack despite summoning sickness
-                }
-                return false;
-            }
-            true
-        })
-        .map(|p| {
-            if let Card::Creature(c) = &p.card {
-                c.power
+    let returning_terrors = returning.iter()
+        .filter(|c| c.base.name == "Terror of the Peaks")
+        .count() as u32;
+    if returning_terrors > 0 {
+        for c in &returning {
+            let others = if c.base.name == "Terror of the Peaks" {
+                returning_terrors - 1
             } else {
-                0
-            }
-        })
-        .sum();
+                returning_terrors
+            };
+            damage += c.power * others;
+        }
+    }
 
-    // Calculate combat damage from reanimated Demons (if Ardyn gives them haste)
-    let reanimated_demon_combat_power: u32 = if ardyn_on_battlefield {
-        // Bringer of the Last Gift is a Demon and would be reanimated
-        // Spider-Man (as a copy of Bringer) is NOT a Demon
-        // Any Demons in graveyard would get haste from Ardyn after reanimate
-        creatures_in_graveyard
-            .iter()
-            .filter(|c| is_creature_demon(c))
-            .map(|c| {
-                if let Card::Creature(creature) = c {
-                    creature.power
-                } else {
-                    0
-                }
-            })
-            .sum()
-    } else {
-        0
-    };
-
-    terror_damage + current_combat_power + reanimated_demon_combat_power
+    let ardyn_returns = returning.iter().any(|c| c.base.name == "Ardyn, the Usurper");
+    if ardyn_returns {
+        damage += SPIDER_COPY_POWER; // the Spider-Man copy is a Vampire Demon
+        damage += returning.iter()
+            .filter(|c| c.creature_types.iter().any(|t| t == "Demon"))
+            .map(|c| c.power)
+            .sum::<u32>();
+    }
+    damage
 }
 
-/// Estimate the combat damage of ONE attack step on a turn after the combo.
-///
-/// Models the battlefield after Spider-Man copies Bringer and the mass
-/// reanimate resolves, then sums the power of each creature (goldfish rules:
-/// no blockers, no removal; everything untaps and attacks):
-/// - The Spider-Man that casts the combo. User rule: anything Spider-Man
-///   copies is a 4/4 (the combat model also keeps copies at their own power,
-///   see `simulate_combat`), so it attacks for 4, not for Bringer's 6.
-/// - Every creature in the graveyard except one Bringer (Mind Swap exiles the
-///   copied card); the rest are mass reanimated.
-/// - Every non-impending creature already on the battlefield, including
-///   Starscourge tokens. Bringer's ETB sacrifices them and the mass reanimate
-///   returns them in the same resolution.
-/// - Impending creatures survive the sacrifice. They attack only when their
-///   time counters run out: one counter is removed in each end phase, so a
-///   permanent with more than one counter cannot attack on the next turn.
-/// - Dark Matter Manipulator gets +2 power for each 7 cards in the graveyard.
-///   The estimate uses the cards that stay in the graveyard after the
-///   reanimate (non-creature cards). Mills during the resolution only add
-///   more, so this is a lower bound.
+/// Estimate the combat damage of ONE attack step on a turn after the combo:
+/// the Spider-Man copy (4), every returning creature, and impending creatures
+/// that lose their last time counter before then. Creatures that were on the
+/// battlefield are sacrificed and stay in the graveyard, so they do not attack.
+/// Dark Matter Manipulator gets +2 power for each 7 cards left in the graveyard
+/// (a lower bound: the sacrificed creatures and later mills add more).
 pub fn calculate_next_turn_damage(state: &GameState) -> u32 {
     const SPIDER_MAN_POWER: u32 = 4;
-
-    // Graveyard after the combo: creatures leave (reanimated or exiled),
-    // non-creature cards stay.
-    let noncreature_gy = state
-        .graveyard
-        .cards()
-        .iter()
+    let noncreature_gy = state.graveyard.cards().iter()
         .filter(|c| !matches!(c, Card::Creature(_)))
         .count() as u32;
     let dmm_bonus = 2 * (noncreature_gy / 7);
 
-    // The Spider-Man that copies Bringer
     let mut total = SPIDER_MAN_POWER;
-
-    // Creatures mass reanimated from the graveyard (all but the exiled Bringer)
-    let mut copied_bringer_skipped = false;
-    for card in state.graveyard.cards() {
-        if let Card::Creature(c) = card {
-            if !copied_bringer_skipped && c.base.name == "Bringer of the Last Gift" {
-                copied_bringer_skipped = true; // Mind Swap exiles the copied card
-                continue;
-            }
-            total += c.power;
-            if c.base.name == "Dark Matter Manipulator" {
-                total += dmm_bonus;
-            }
+    for c in combo_returning_creatures(state) {
+        total += c.power;
+        if c.base.name == "Dark Matter Manipulator" {
+            total += dmm_bonus;
         }
     }
-
-    // Creatures already on the battlefield: non-impending ones are sacrificed
-    // and reanimated as fresh non-copies; impending ones survive as they are.
+    // Impending creatures are not creatures yet, so they survive the sacrifice;
+    // one time counter is removed at each end step
     for perm in state.battlefield.permanents() {
         if let Card::Creature(c) = &perm.card {
-            let time_counters = perm.get_counter(CounterType::Time);
-            if time_counters > 1 {
-                continue; // still impending during the next turn's combat
-            }
-            total += c.power;
-            if time_counters == 0 && c.base.name == "Dark Matter Manipulator" {
-                total += dmm_bonus;
+            if perm.get_counter(CounterType::Time) == 1 {
+                total += c.power;
             }
         }
     }
-
     total
 }
 
@@ -2564,9 +2449,10 @@ mod combo_damage_tests {
         state.graveyard.add_card(bringer);
 
         let damage = calculate_combo_damage(&state);
-        // Terror on battlefield triggers for the Spider-Man copy (4 power,
-        // user rule) + Bringer (6 power) = 10 damage
-        assert_eq!(damage, 10);
+        // Terror on the battlefield triggers for the entering Spider-Man copy
+        // (4 power, user rule), then Bringer's trigger sacrifices it. The only
+        // Bringer is the copied card (exiled), so nothing returns: 4 damage
+        assert_eq!(damage, 4);
     }
 
     #[test]
@@ -2611,11 +2497,9 @@ mod combo_damage_tests {
         state.graveyard.add_card(bringer);
 
         let damage = calculate_combo_damage(&state);
-        // Terrors from graveyard trigger for creatures entering AT THE SAME TIME
-        // Bringer (6 power) triggers Terror from graveyard = 6 damage
-        // Terror (3 power) triggers OTHER Terrors from graveyard (terrorsInGraveyard - 1 = 0) = 0 damage
-        // Total: 6 damage
-        assert_eq!(damage, 6);
+        // The Bringer is the copied card (exiled). Only the Terror returns,
+        // and no other creature returns with it: 0 damage
+        assert_eq!(damage, 0);
     }
 
     #[test]
@@ -2643,8 +2527,8 @@ mod combo_damage_tests {
         state.battlefield.add_permanent(permanent);
 
         let damage = calculate_combo_damage(&state);
-        // Combat damage from creature with no summoning sickness
-        assert_eq!(damage, 4);
+        // Bringer's trigger sacrifices the creature before combat: 0 damage
+        assert_eq!(damage, 0);
     }
 
     #[test]
@@ -2704,8 +2588,9 @@ mod combo_damage_tests {
         state.battlefield.add_permanent(terror);
         state.graveyard.add_card(test_creature("Bringer of the Last Gift", 6));
 
-        // Spider-Man copy 4 + reanimated Bringer 6, one Terror = 10
-        assert_eq!(calculate_combo_damage(&state), 10);
+        // Terror triggers once, for the 4-power Spider-Man copy; the copied
+        // Bringer is exiled and does not return
+        assert_eq!(calculate_combo_damage(&state), 4);
     }
 
     #[test]
@@ -2820,9 +2705,29 @@ mod combo_damage_tests {
         state.graveyard.add_card(bringer);
 
         let damage = calculate_combo_damage(&state);
-        // Each Terror triggers for the Spider-Man copy (4, user rule) +
-        // Bringer (6) = 10 per Terror; 2 Terrors = 20 damage
-        assert_eq!(damage, 20);
+        // Each Terror triggers for the 4-power Spider-Man copy, then both are
+        // sacrificed: 2 x 4 = 8 damage
+        assert_eq!(damage, 8);
+    }
+
+    #[test]
+    fn test_bringer_sacrificed_creatures_stay_in_graveyard() {
+        // Oracle: "returns all creature cards from their graveyard that
+        // weren't put there this way". A creature sacrificed by the trigger
+        // stays; a creature card already in the graveyard returns.
+        let mut state = GameState::new();
+        state.turn = 4;
+        state.battlefield.add_permanent(Permanent::new(test_creature("Town Greeter", 1), 2));
+        state.graveyard.add_card(test_creature("Valgavoth, Terror Eater", 9));
+        // The Spider-Man copy is the last permanent (excluded from the sacrifice)
+        state.battlefield.add_permanent(Permanent::new(test_creature("Superior Spider-Man", 4), 4));
+        let mut rng = crate::rng::GameRng::new(Some(1));
+        resolve_bringer_etb(&mut state, &mut rng, false);
+        let on_bf: Vec<&str> = state.battlefield.permanents().iter().map(|p| p.card.name()).collect();
+        assert!(on_bf.contains(&"Valgavoth, Terror Eater"), "graveyard creature returns");
+        assert!(!on_bf.contains(&"Town Greeter"), "sacrificed creature does not return");
+        assert!(state.graveyard.cards().iter().any(|c| c.name() == "Town Greeter"),
+            "sacrificed creature stays in the graveyard");
     }
 }
 
