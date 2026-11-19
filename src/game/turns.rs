@@ -90,12 +90,36 @@ pub fn end_phase(state: &mut GameState) {
         }
     }
 
-    // Discard to hand size 7 if needed
+    // Discard to hand size 7, choosing like the other discard effects:
+    // a reanimation target first, then a blank, and keep Spider-Man
     while state.hand.size() > 7 {
-        // In a full implementation, this would choose which card to discard
-        // For now, just remove the last card
-        if let Some(card) = state.hand.remove_card(state.hand.size() - 1) {
+        let idx = crate::simulation::decisions::DecisionEngine::choose_discard(state)
+            .unwrap_or(state.hand.size() - 1);
+        if let Some(card) = state.hand.remove_card(idx) {
             state.add_to_graveyard(card);
         }
+    }
+}
+
+#[cfg(test)]
+mod cleanup_tests {
+    use super::*;
+    use crate::card::CardDatabase;
+
+    #[test]
+    fn test_cleanup_discards_like_other_discard_effects() {
+        let db = CardDatabase::from_file("cards.json").expect("cards");
+        let mut state = GameState::new();
+        // 8 cards: Spider-Man last, a Bringer in the middle
+        for n in ["Watery Grave", "Swamp", "Bringer of the Last Gift", "Does Machines",
+                  "Watery Grave", "Swamp", "Watery Grave", "Superior Spider-Man"] {
+            state.hand.add_card(db.get_card(n).expect(n));
+        }
+        end_phase(&mut state);
+        assert_eq!(state.hand.size(), 7);
+        assert!(state.graveyard.cards().iter().any(|c| c.name() == "Bringer of the Last Gift"),
+            "the reanimation target is discarded");
+        assert!(state.hand.cards().iter().any(|c| c.name() == "Superior Spider-Man"),
+            "Spider-Man is kept");
     }
 }
